@@ -1,1 +1,1 @@
-from harmony import Harmony
+from .harmony import Harmony

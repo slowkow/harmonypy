@@ -2,73 +2,6 @@ import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
 
-meta_data = pd.read_csv("meta.tsv.gz", sep = "\t")
-
-data_mat = pd.read_csv("pcs.tsv.gz", sep = "\t")
-data_mat = np.array(data_mat)
-
-vars_use = ['dataset']
-
-"""
-The Harmony algorithm for integrating datasets.
-"""
-
-theta = 1
-lamb = 0.1
-sigma = 0.1
-nclust = 50
-tau = 0
-block_size = 0.05
-max_iter_harmony = 10
-max_iter_cluster = 200
-epsilon_cluster = 1e-5
-epsilon_harmony = 1e-4
-do_pca = False
-return_object = True
-verbose = True
-reference_values = None
-cluster_prior = None
-
-N = meta_data.shape[0]
-if data_mat.shape[1] != N:
-    data_mat = data_mat.T
-
-if nclust is None:
-    nclust = np.min([np.round(N / 30.0), 100]).astype(int)
-
-if theta is None:
-    theta = np.repeat(2, len(vars_use))
-
-if lamb is None:
-    lamb = np.repeat(1, len(vars_use))
-
-sigma = np.repeat(sigma, nclust)
-
-categories = pd.Categorical(np.squeeze(meta_data[vars_use]))
-
-phi = np.zeros((len(categories.categories), N))
-for i in range(len(categories.categories)):
-    ix = categories == categories.categories[i]
-    phi[i,ix] = 1
-
-N_b = phi.sum(axis = 1)
-Pr_b = N_b / N
-
-B_vec = np.array([len(categories.categories)])
-
-theta = np.repeat(theta, B_vec)
-
-lamb = np.repeat(lamb, B_vec)
-
-lamb_mat = np.diag(np.insert(lamb, 0, 0))
-
-phi_moe = np.vstack((np.repeat(1, N), phi))
-
-def safe_entropy(x: np.array):
-    y = np.multiply(x, np.log(x))
-    y[~np.isfinite(y)] = 0.0
-    return y
-
 class Harmony(object):
     def __init__(
             self, __Z, __Phi, __Phi_moe, __Pr_b, __sigma,
@@ -258,26 +191,9 @@ class Harmony(object):
             return False
         return True
 
-ho = Harmony(
-    data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_cluster,
-    epsilon_cluster, epsilon_harmony, nclust, tau, block_size, lamb_mat, verbose
-)
 
-
-# Tests
-
-np.all(np.equal(ho.Y.shape, (ho.d, ho.K)))
-
-np.all(np.equal(ho.Z_corr.shape, (ho.d, ho.N)))
-
-np.all(np.equal(ho.Z_cos.shape, (ho.d, ho.N)))
-
-np.all(np.equal(ho.R.shape, (ho.K, ho.N)))
-
-
-import pandas as pd
-
-res = pd.DataFrame(ho.Z_corr)
-res.columns = ['X{}'.format(i + 1) for i in range(res.shape[1])]
-res.to_csv("adj.tsv.gz", sep = "\t", index = False)
+def safe_entropy(x: np.array):
+    y = np.multiply(x, np.log(x))
+    y[~np.isfinite(y)] = 0.0
+    return y
 

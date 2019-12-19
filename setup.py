@@ -4,7 +4,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="harmonypy-slowkow", # Replace with your own username
+    name="harmonypy",
     version="0.0.1",
     author="Kamil Slowikowski",
     author_email="kslowikowski@gmail.com",

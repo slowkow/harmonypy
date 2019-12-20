@@ -2,23 +2,100 @@ import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
 
+def run_harmony(
+    data_mat, meta_data, vars_use,
+    theta = None, lamb = 0.1, sigma = 0.1, 
+    nclust = None, tau = 0, block_size = 0.05, 
+    max_iter_harmony = 10, max_iter_cluster = 200, 
+    epsilon_cluster = 1e-5, epsilon_harmony = 1e-4, 
+    plot_convergence = False, return_object = False, 
+    verbose = True, reference_values = None, cluster_prior = None
+):
+    """Run Harmony.
+    """
+
+    # theta = None
+    # lamb = 0.1
+    # sigma = 0.1
+    # nclust = None
+    # tau = 0
+    # block_size = 0.05
+    # max_iter_harmony = 10
+    # max_iter_cluster = 200
+    # epsilon_cluster = 1e-5
+    # epsilon_harmony = 1e-4
+    # plot_convergence = False
+    # return_object = False
+    # verbose = True
+    # reference_values = None
+    # cluster_prior = None
+
+    N = meta_data.shape[0]
+    if data_mat.shape[1] != N:
+        data_mat = data_mat.T
+
+    assert data_mat.shape[1] == N, \
+       "data_mat and meta_data do not have the same number of cells" 
+
+    if nclust is None:
+        nclust = np.min([np.round(N / 30.0), 100]).astype(int)
+
+    if theta is None:
+        theta = np.repeat(2, len(vars_use))
+
+    if lamb is None:
+        lamb = np.repeat(1, len(vars_use))
+
+    if type(sigma) is float and nclust > 1:
+        sigma = np.repeat(sigma, nclust)
+
+    # TODO support more than one variable for vars_use
+    categories = pd.Categorical(np.squeeze(meta_data[vars_use]))
+
+    phi = np.zeros((len(categories.categories), N))
+    for i in range(len(categories.categories)):
+        ix = categories == categories.categories[i]
+        phi[i,ix] = 1
+
+    N_b = phi.sum(axis = 1)
+    Pr_b = N_b / N
+
+    B_vec = np.array([len(categories.categories)])
+
+    theta = np.repeat(theta, B_vec)
+    if tau > 0:
+        theta = theta * (1 - np.exp(-(N_b / (nclust * tau)) ** 2))
+
+    lamb = np.repeat(lamb, B_vec)
+
+    lamb_mat = np.diag(np.insert(lamb, 0, 0))
+
+    phi_moe = np.vstack((np.repeat(1, N), phi))
+
+    ho = Harmony(
+        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_cluster,
+        epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose
+    )
+
+    return ho
+
 class Harmony(object):
     def __init__(
-            self, __Z, __Phi, __Phi_moe, __Pr_b, __sigma,
+            self, Z, Phi, Phi_moe, Pr_b, sigma,
             __theta, __max_iter_kmeans, __epsilon_kmeans,
-            __epsilon_harmony, __K, tau, __block_size,
+            __epsilon_harmony, __K, __block_size,
             __lambda, __verbose
     ):
-        self.Z_corr = np.array(__Z)
-        self.Z_orig = np.array(__Z)
+        self.Z_corr = np.array(Z)
+        self.Z_orig = np.array(Z)
 
         self.Z_cos = self.Z_orig / self.Z_orig.max(axis=0)
         self.Z_cos = self.Z_cos / np.linalg.norm(self.Z_cos, ord=2, axis=0)
 
-        self.Phi             = __Phi;
-        self.Phi_moe         = __Phi_moe
+        self.Phi             = Phi;
+        self.Phi_moe         = Phi_moe
         self.N               = self.Z_corr.shape[1]
-        self.Pr_b            = __Pr_b
+        self.Pr_b            = Pr_b
         self.B               = self.Phi.shape[0]
         self.d               = self.Z_corr.shape[0]
         self.window_size     = 3
@@ -26,8 +103,8 @@ class Harmony(object):
         self.epsilon_harmony = __epsilon_harmony
 
         self.lamb            = __lambda
-        self.sigma           = __sigma
-        self.sigma_prior     = __sigma
+        self.sigma           = sigma
+        self.sigma_prior     = sigma
         self.block_size      = __block_size
         self.K               = __K
         self.max_iter_kmeans = __max_iter_kmeans
@@ -79,12 +156,12 @@ class Harmony(object):
     def compute_objective(self):
         kmeans_error = np.sum(np.multiply(self.R, self.dist_mat))
         # Entropy
-        _entropy = np.sum(safe_entropy(ho.R) * sigma[:,np.newaxis])
+        _entropy = np.sum(safe_entropy(self.R) * self.sigma[:,np.newaxis])
         # Cross Entropy
-        x = (ho.R * sigma[:,np.newaxis])
-        y = np.tile(ho.theta[:,np.newaxis], ho.K).T
-        z = np.log((ho.O + 1) / (ho.E + 1))
-        w = np.dot(y * z, ho.Phi)
+        x = (self.R * self.sigma[:,np.newaxis])
+        y = np.tile(self.theta[:,np.newaxis], self.K).T
+        z = np.log((self.O + 1) / (self.E + 1))
+        w = np.dot(y * z, self.Phi)
         _cross_entropy = np.sum(x * w)
         # Save results
         self.objective_kmeans.append(kmeans_error + _entropy + _cross_entropy)
@@ -113,7 +190,7 @@ class Harmony(object):
         # Update Y to match new integrated data
         self.dist_mat = 2 * (1 - np.dot(self.Y.T, self.Z_cos))
         for i in range(self.max_iter_kmeans):
-            print("kmeans {}".format(i))
+            # print("kmeans {}".format(i))
             # STEP 1: Update Y
             self.Y = np.dot(self.Z_cos, self.R.T)
             self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)

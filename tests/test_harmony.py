@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
+from scipy.stats.stats import pearsonr
+import harmonypy as hm
 
 meta_data = pd.read_csv("data/meta.tsv.gz", sep = "\t")
 data_mat = pd.read_csv("data/pcs.tsv.gz", sep = "\t")
@@ -32,7 +34,6 @@ vars_use = ['dataset']
 #        [ 0.00866286, -0.00514987, -0.0008989 , -0.00821785, -0.00126997],
 #        [-0.00953977,  0.00222714, -0.00374373, -0.00028554,  0.00063737]])
 
-import harmonypy as hm
 ho = hm.run_harmony(data_mat, meta_data, vars_use)
 
 # Write the adjusted PCs to a new file.
@@ -40,3 +41,32 @@ res = pd.DataFrame(ho.Z_corr)
 res.columns = ['X{}'.format(i + 1) for i in range(res.shape[1])]
 res.to_csv("data/adj.tsv.gz", sep = "\t", index = False)
 
+# Test 2
+########################################################################
+
+import pandas as pd
+import numpy as np
+from scipy.cluster.vq import kmeans
+from scipy.stats.stats import pearsonr
+import harmonypy as hm
+
+meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep = "\t")
+data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep = "\t")
+
+from time import time
+
+start = time()
+ho = hm.run_harmony(data_mat, meta_data, ['donor'])
+end = time()
+print("elapsed {:.2f} seconds".format(end - start)) # 24 seconds for python, 5 seconds for Rcpp
+
+res = pd.DataFrame(ho.Z_corr).T
+res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
+res.to_csv("data/pbmc_3500_pcs_harmonized_python.tsv.gz", sep = "\t", index = False)
+
+harm = pd.read_csv("data/pbmc_3500_pcs_harmonized.tsv.gz", sep = "\t")
+
+cors = []
+for i in range(res.shape[1]):
+    cors.append(pearsonr(res.iloc[:,i].values, harm.iloc[:,i].values))
+print([np.round(x[0], 3) for x in cors])

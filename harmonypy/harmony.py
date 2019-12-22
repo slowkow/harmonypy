@@ -82,9 +82,9 @@ def run_harmony(
 class Harmony(object):
     def __init__(
             self, Z, Phi, Phi_moe, Pr_b, sigma,
-            __theta, __max_iter_kmeans, __epsilon_kmeans,
-            __epsilon_harmony, __K, __block_size,
-            __lambda, __verbose
+            theta, max_iter_kmeans, epsilon_kmeans,
+            epsilon_harmony, K, block_size,
+            lamb, verbose
     ):
         self.Z_corr = np.array(Z)
         self.Z_orig = np.array(Z)
@@ -99,17 +99,17 @@ class Harmony(object):
         self.B               = self.Phi.shape[0]
         self.d               = self.Z_corr.shape[0]
         self.window_size     = 3
-        self.epsilon_kmeans  = __epsilon_kmeans
-        self.epsilon_harmony = __epsilon_harmony
+        self.epsilon_kmeans  = epsilon_kmeans
+        self.epsilon_harmony = epsilon_harmony
 
-        self.lamb            = __lambda
+        self.lamb            = lamb
         self.sigma           = sigma
         self.sigma_prior     = sigma
-        self.block_size      = __block_size
-        self.K               = __K
-        self.max_iter_kmeans = __max_iter_kmeans
-        self.verbose         = __verbose
-        self.theta           = __theta
+        self.block_size      = block_size
+        self.K               = K
+        self.max_iter_kmeans = max_iter_kmeans
+        self.verbose         = verbose
+        self.theta           = theta
 
         self.objective_harmony        = []
         self.objective_kmeans         = []

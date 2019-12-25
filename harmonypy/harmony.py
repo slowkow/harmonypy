@@ -1,4 +1,3 @@
-import numba
 import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
@@ -242,16 +241,6 @@ class Harmony(object):
             self.O += np.dot(self.R[:,b], self.Phi[:,b].T)
         return 0
 
-    # def moe_correct_ridge(self):
-    #     self.Z_corr = self.Z_orig
-    #     for i in range(self.K):
-    #         self.Phi_Rk = np.dot(self.Phi_moe, np.diag(self.R[i,:]))
-    #         x = np.dot(self.Phi_Rk, self.Phi_moe.T) + self.lamb
-    #         self.W = np.dot(np.dot(np.linalg.inv(x), self.Phi_Rk), self.Z_orig.T)
-    #         self.W[0,:] = 0 # do not remove the intercept
-    #         self.Z_corr -= np.dot(self.W.T, self.Phi_Rk)
-    #     self.Z_cos = self.Z_corr / np.linalg.norm(self.Z_corr, ord=2, axis=0)
-
     def check_convergence(self, i_type):
         obj_old = 0.0
         obj_new = 0.0
@@ -279,21 +268,17 @@ def safe_entropy(x: np.array):
     y[~np.isfinite(y)] = 0.0
     return y
 
-# @numba.njit(fastmath=True)
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
     Z_corr = Z_orig
     d = np.zeros((R.shape[1], R.shape[1]))
-    di = np.diag_indices(d.shape[0])
-    # import pdb; pdb.set_trace()
+    di = np.arange(d.shape[0])
     for i in range(K):
-        d[di] = R[i,:]
+        d[di,di] = R[i,:]
         Phi_Rk = np.dot(Phi_moe, d)
         x = np.dot(Phi_Rk, Phi_moe.T) + lamb
         W = np.dot(np.dot(np.linalg.inv(x), Phi_Rk), Z_orig.T)
         W[0,:] = 0 # do not remove the intercept
         Z_corr -= np.dot(W.T, Phi_Rk)
-    # Z_cos = Z_corr / np.linalg.norm(Z_corr, 2, 0)
-    for i in range(Z_cos.shape[1]):
-        Z_cos[:,i] = Z_corr[:,i] / np.linalg.norm(Z_corr[:,i], 2)
+    Z_cos = Z_corr / np.linalg.norm(Z_corr, ord=2, axis=0)
     return Z_cos, Z_corr, W, Phi_Rk
 

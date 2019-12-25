@@ -279,17 +279,15 @@ def safe_entropy(x: np.array):
     y[~np.isfinite(y)] = 0.0
     return y
 
-#@numba.njit(fastmath=True)
+# @numba.njit(fastmath=True)
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
     Z_corr = Z_orig
     d = np.zeros((R.shape[1], R.shape[1]))
     di = np.diag_indices(d.shape[0])
     # import pdb; pdb.set_trace()
     for i in range(K):
-        d.fill(0)
         d[di] = R[i,:]
         Phi_Rk = np.dot(Phi_moe, d)
-        # Phi_Rk = np.dot(Phi_moe, np.diag(R[i,:]))
         x = np.dot(Phi_Rk, Phi_moe.T) + lamb
         W = np.dot(np.dot(np.linalg.inv(x), Phi_Rk), Z_orig.T)
         W[0,:] = 0 # do not remove the intercept

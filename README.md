@@ -40,8 +40,6 @@ vars_use = ['dataset']
 # 298  t293_GGTACTGAGTCGAT    t293   2685      0.027846      t293
 # 299  t293_ACGCTGCTTCTTAC    t293   3513      0.021240      t293
 
-# [300 rows x 5 columns]
-
 # data_mat[:5,:5]
 #
 # array([[ 0.0071695 , -0.00552724, -0.0036281 , -0.00798025,  0.00028931],

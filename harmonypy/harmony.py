@@ -213,13 +213,13 @@ class Harmony(object):
         return 0
 
     def update_R(self):
-        update_order = np.arange(self.N)
-        np.random.shuffle(update_order)
         self._scale_dist = -self.dist_mat
         self._scale_dist = self._scale_dist / self.sigma[:,None]
         self._scale_dist -= np.max(self._scale_dist, axis=0)
         self._scale_dist = np.exp(self._scale_dist)
         # Update cells in blocks
+        update_order = np.arange(self.N)
+        np.random.shuffle(update_order)
         n_blocks = np.ceil(1 / self.block_size).astype(int)
         blocks = np.array_split(update_order, n_blocks)
         for b in blocks:

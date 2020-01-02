@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name                          = "harmonypy",
-    version                       = "0.0.3",
+    version                       = "0.0.4",
     author                        = "Kamil Slowikowski",
     author_email                  = "kslowikowski@gmail.com",
     description                   = "A data integration algorithm.",
@@ -23,4 +23,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.6',
+    install_requires=['pandas','numpy','scipy'],
 )

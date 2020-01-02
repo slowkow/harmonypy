@@ -7,6 +7,14 @@ This package is a port of the [harmony][harmonyR] R package by [Ilya Korsunsky].
 [harmonyR]: https://github.com/immunogenomics/harmony
 [Ilya Korsunsky]: https://github.com/ilyakorsunsky
 
+# Installation
+
+```
+pip install harmonypy
+```
+
+# Usage
+
 Here is a brief example using the data that comes with the R package:
 
 ```python

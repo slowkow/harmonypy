@@ -75,6 +75,7 @@ Here is a brief example using the data that comes with the R package:
 
 .. _harmony: https://github.com/immunogenomics/harmony
 .. _Ilya Korsunsky: https://github.com/ilyakorsunsky
+.. _pip: https://pip.readthedocs.io/
 
 .. |PyPI version| image:: https://img.shields.io/pypi/v/harmonypy.svg
     :target: https://pypi.org/project/harmonypy/

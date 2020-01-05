@@ -10,6 +10,17 @@ Harmony is an algorithm for integrating multiple high-dimensional datasets.
 
 harmonypy is a port of the [harmony] R package by [Ilya Korsunsky].
 
+Example
+-------
+
+<p align="center">
+  <img src="https://i.imgur.com/lqReopf.gif">
+</p>
+
+This animation shows the Harmony alignment of three single-cell RNA-seq datasets from different donors.
+
+[→ How to make this animation.](https://slowkow.com/notes/harmony-animation/)
+
 Installation
 ------------
 

@@ -115,7 +115,7 @@ def compute_simpson(distances, indices, labels, n_categories, perplexity, tol = 
         # Simpson's index
         for label_category in labels.categories:
             ix = indices[:,i]
-            q = np.squeeze(np.argwhere(labels[ix] == label_category))
+            q = np.squeeze(np.argwhere(labels[ix] == label_category)).reshape((1, -1))
             if len(q):
                 P_sum = np.sum(P[q])
                 simpson[i] += P_sum * P_sum

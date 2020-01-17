@@ -1,10 +1,12 @@
 harmonypy
 =========
 
-[![Latest PyPI Version][pb]][pypi]
+[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi]
 
 [pb]: https://img.shields.io/pypi/v/harmonypy.svg
 [pypi]: https://pypi.org/project/harmonypy/
+
+[db]: https://img.shields.io/pypi/dm/harmonypy?label=pypi%20downloads
 
 Harmony is an algorithm for integrating multiple high-dimensional datasets.
 

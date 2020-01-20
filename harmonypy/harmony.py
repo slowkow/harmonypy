@@ -26,7 +26,8 @@ def run_harmony(
     max_iter_harmony = 10, max_iter_cluster = 200, 
     epsilon_cluster = 1e-5, epsilon_harmony = 1e-4, 
     plot_convergence = False, return_object = False, 
-    verbose = True, reference_values = None, cluster_prior = None
+    verbose = True, reference_values = None, cluster_prior = None,
+    random_state = 0
 ):
     """Run Harmony.
     """
@@ -46,6 +47,7 @@ def run_harmony(
     # verbose = True
     # reference_values = None
     # cluster_prior = None
+    # random_state = 0
 
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
@@ -88,6 +90,8 @@ def run_harmony(
     lamb_mat = np.diag(np.insert(lamb, 0, 0))
 
     phi_moe = np.vstack((np.repeat(1, N), phi))
+
+    np.random.seed(random_state)
 
     ho = Harmony(
         data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_cluster,
@@ -274,7 +278,7 @@ class Harmony(object):
         if i_type == 1:
             obj_old = self.objective_harmony[-2]
             obj_new = self.objective_harmony[-1]
-            if abs(obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony:
+            if (obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony:
                 return True
             return False
         return True

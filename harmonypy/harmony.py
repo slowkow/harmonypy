@@ -21,7 +21,7 @@ from scipy.cluster.vq import kmeans
 
 def run_harmony(
     data_mat, meta_data, vars_use,
-    theta = None, lamb = 0.1, sigma = 0.1, 
+    theta = None, lamb = None, sigma = 0.1, 
     nclust = None, tau = 0, block_size = 0.05, 
     max_iter_harmony = 10, max_iter_cluster = 200, 
     epsilon_cluster = 1e-5, epsilon_harmony = 1e-4, 

@@ -290,7 +290,7 @@ def safe_entropy(x: np.array):
     return y
 
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
-    Z_corr = Z_orig
+    Z_corr = Z_orig.copy()
     for i in range(K):
         Phi_Rk = np.multiply(Phi_moe, R[i,:])
         x = np.dot(Phi_Rk, Phi_moe.T) + lamb

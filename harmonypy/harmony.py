@@ -19,39 +19,52 @@ import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
 
+# from IPython.core.debugger import set_trace
+
 def run_harmony(
-    data_mat, meta_data, vars_use,
-    theta = None, lamb = None, sigma = 0.1, 
-    nclust = None, tau = 0, block_size = 0.05, 
-    max_iter_harmony = 10, max_iter_cluster = 200, 
-    epsilon_cluster = 1e-5, epsilon_harmony = 1e-4, 
-    plot_convergence = False, return_object = False, 
-    verbose = True, reference_values = None, cluster_prior = None,
+    data_mat: np.ndarray,
+    meta_data: pd.DataFrame,
+    vars_use,
+    theta = None,
+    lamb = None,
+    sigma = 0.1, 
+    nclust = None,
+    tau = 0,
+    block_size = 0.05, 
+    max_iter_harmony = 10,
+    max_iter_cluster = 200, 
+    epsilon_cluster = 1e-5,
+    epsilon_harmony = 1e-4, 
+    plot_convergence = False,
+    verbose = True,
+    reference_values = None,
+    cluster_prior = None,
     random_state = 0
 ):
     """Run Harmony.
     """
 
-    # theta = None
-    # lamb = 0.1
-    # sigma = 0.1
-    # nclust = None
-    # tau = 0
-    # block_size = 0.05
-    # max_iter_harmony = 10
-    # max_iter_cluster = 200
-    # epsilon_cluster = 1e-5
-    # epsilon_harmony = 1e-4
-    # plot_convergence = False
-    # return_object = False
-    # verbose = True
-    # reference_values = None
-    # cluster_prior = None
-    # random_state = 0
+    theta = None
+    lamb = None
+    sigma = 0.1
+    nclust = None
+    tau = 0
+    block_size = 0.05
+    max_iter_harmony = 10
+    max_iter_cluster = 200
+    epsilon_cluster = 1e-5
+    epsilon_harmony = 1e-4
+    plot_convergence = False
+    verbose = True
+    reference_values = None
+    cluster_prior = None
+    random_state = 0
 
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
         data_mat = data_mat.T
+
+    phi = pd.get_dummies(meta_data[vars_use]).to_numpy().T
 
     assert data_mat.shape[1] == N, \
        "data_mat and meta_data do not have the same number of cells" 
@@ -60,32 +73,21 @@ def run_harmony(
         nclust = np.min([np.round(N / 30.0), 100]).astype(int)
 
     if theta is None:
-        theta = np.repeat(2, len(vars_use))
+        theta = np.repeat(1, phi.shape[0])
 
     if lamb is None:
-        lamb = np.repeat(1, len(vars_use))
+        lamb = np.repeat(1, phi.shape[0])
 
     if type(sigma) is float and nclust > 1:
         sigma = np.repeat(sigma, nclust)
 
-    # TODO support more than one variable for vars_use
-    categories = pd.Categorical(np.squeeze(meta_data[vars_use]))
-
-    phi = np.zeros((len(categories.categories), N))
-    for i in range(len(categories.categories)):
-        ix = categories == categories.categories[i]
-        phi[i,ix] = 1
-
+    # Number of items in each category.
     N_b = phi.sum(axis = 1)
+    # Proportion of items in each category.
     Pr_b = N_b / N
 
-    B_vec = np.array([len(categories.categories)])
-
-    theta = np.repeat(theta, B_vec)
     if tau > 0:
         theta = theta * (1 - np.exp(-(N_b / (nclust * tau)) ** 2))
-
-    lamb = np.repeat(lamb, B_vec)
 
     lamb_mat = np.diag(np.insert(lamb, 0, 0))
 
@@ -113,11 +115,11 @@ class Harmony(object):
         self.Z_cos = self.Z_orig / self.Z_orig.max(axis=0)
         self.Z_cos = self.Z_cos / np.linalg.norm(self.Z_cos, ord=2, axis=0)
 
-        self.Phi             = Phi;
+        self.Phi             = Phi
         self.Phi_moe         = Phi_moe
         self.N               = self.Z_corr.shape[1]
         self.Pr_b            = Pr_b
-        self.B               = self.Phi.shape[0]
+        self.B               = self.Phi.shape[0] # number of batch variables
         self.d               = self.Z_corr.shape[0]
         self.window_size     = 3
         self.epsilon_kmeans  = epsilon_kmeans
@@ -127,7 +129,7 @@ class Harmony(object):
         self.sigma           = sigma
         self.sigma_prior     = sigma
         self.block_size      = block_size
-        self.K               = K
+        self.K               = K                # number of clusters
         self.max_iter_kmeans = max_iter_kmeans
         self.verbose         = verbose
         self.theta           = theta

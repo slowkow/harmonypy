@@ -21,12 +21,13 @@ from scipy.cluster.vq import kmeans
 
 def run_harmony(
     data_mat, meta_data, vars_use,
-    theta = None, lamb = 0.1, sigma = 0.1, 
+    theta = None, lamb = None, sigma = 0.1, 
     nclust = None, tau = 0, block_size = 0.05, 
     max_iter_harmony = 10, max_iter_cluster = 200, 
     epsilon_cluster = 1e-5, epsilon_harmony = 1e-4, 
     plot_convergence = False, return_object = False, 
-    verbose = True, reference_values = None, cluster_prior = None
+    verbose = True, reference_values = None, cluster_prior = None,
+    random_state = 0
 ):
     """Run Harmony.
     """
@@ -46,6 +47,7 @@ def run_harmony(
     # verbose = True
     # reference_values = None
     # cluster_prior = None
+    # random_state = 0
 
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
@@ -88,6 +90,8 @@ def run_harmony(
     lamb_mat = np.diag(np.insert(lamb, 0, 0))
 
     phi_moe = np.vstack((np.repeat(1, N), phi))
+
+    np.random.seed(random_state)
 
     ho = Harmony(
         data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_cluster,
@@ -274,7 +278,7 @@ class Harmony(object):
         if i_type == 1:
             obj_old = self.objective_harmony[-2]
             obj_new = self.objective_harmony[-1]
-            if abs(obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony:
+            if (obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony:
                 return True
             return False
         return True
@@ -286,7 +290,7 @@ def safe_entropy(x: np.array):
     return y
 
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
-    Z_corr = Z_orig
+    Z_corr = Z_orig.copy()
     for i in range(K):
         Phi_Rk = np.multiply(Phi_moe, R[i,:])
         x = np.dot(Phi_Rk, Phi_moe.T) + lamb

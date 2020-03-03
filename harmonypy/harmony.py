@@ -31,8 +31,7 @@ def run_harmony(
     nclust = None,
     tau = 0,
     block_size = 0.05, 
-    max_iter_harmony = 10,
-    max_iter_cluster = 200, 
+    max_iter_kmeans = 10,
     epsilon_cluster = 1e-5,
     epsilon_harmony = 1e-4, 
     plot_convergence = False,
@@ -50,8 +49,6 @@ def run_harmony(
     # nclust = None
     # tau = 0
     # block_size = 0.05
-    # max_iter_harmony = 10
-    # max_iter_cluster = 200
     # epsilon_cluster = 1e-5
     # epsilon_harmony = 1e-4
     # plot_convergence = False
@@ -114,7 +111,7 @@ def run_harmony(
     np.random.seed(random_state)
 
     ho = Harmony(
-        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_cluster,
+        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_kmeans,
         epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose
     )
 

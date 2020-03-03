@@ -1,5 +1,8 @@
 # 0.0.4 - 2020-03-02
 
+- Fix a bug in the LISI code that sometimes causes computation to break. Thanks
+  to @tariqdaouda for reporting it in issue #1
+
 - Fix a bug that prevents controlling the number of iterations. Thanks to
   @liboxun for reporting it in issue #3
 

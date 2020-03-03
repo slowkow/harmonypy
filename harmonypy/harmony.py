@@ -18,6 +18,16 @@
 import pandas as pd
 import numpy as np
 from scipy.cluster.vq import kmeans
+import logging
+
+# create logger
+logger = logging.getLogger('harmonypy')
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 # from IPython.core.debugger import set_trace
 
@@ -158,7 +168,7 @@ class Harmony(object):
 
         self.allocate_buffers()
         self.init_cluster()
-        self.harmonize(10, self.verbose)
+        self.harmonize(self.max_iter_kmeans, self.verbose)
 
     def result(self):
         return self.Z_corr
@@ -208,9 +218,10 @@ class Harmony(object):
         self.objective_kmeans_cross.append(_cross_entropy)
 
     def harmonize(self, iter_harmony=10, verbose=True):
+        converged = False
         for i in range(1, iter_harmony + 1):
             if verbose:
-                print("Harmony {}/{}".format(i, iter_harmony))
+                logger.info("Iteration {} of {}".format(i, iter_harmony))
             # STEP 1: Clustering
             self.cluster()
             # STEP 2: Regress out covariates
@@ -220,10 +231,16 @@ class Harmony(object):
                 self.Phi_Rk, self.Phi_moe, self.lamb
             )
             # STEP 3: Check for convergence
-            if self.check_convergence(1):
+            converged = self.check_convergence(1)
+            if converged:
                 if verbose:
-                    print("Harmony converged after {} iteration{}".format(i, 's' if i > 1 else ''))
+                    logger.info(
+                        "Converged after {} iteration{}"
+                        .format(i, 's' if i > 1 else '')
+                    )
                 break
+        if verbose and not converged:
+            logger.info("Stopped before convergence")
         return 0
 
     def cluster(self):

@@ -156,6 +156,7 @@ class Harmony(object):
         self.sigma_prior     = sigma
         self.block_size      = block_size
         self.K               = K                # number of clusters
+        self.max_iter_harmony = max_iter_harmony
         self.max_iter_kmeans = max_iter_kmeans
         self.verbose         = verbose
         self.theta           = theta

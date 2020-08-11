@@ -41,7 +41,8 @@ def run_harmony(
     nclust = None,
     tau = 0,
     block_size = 0.05, 
-    max_iter_kmeans = 10,
+    max_iter_harmony = 10,
+    max_iter_kmeans = 20,
     epsilon_cluster = 1e-5,
     epsilon_harmony = 1e-4, 
     plot_convergence = False,
@@ -121,7 +122,7 @@ def run_harmony(
     np.random.seed(random_state)
 
     ho = Harmony(
-        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_kmeans,
+        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
         epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose
     )
 
@@ -130,8 +131,8 @@ def run_harmony(
 class Harmony(object):
     def __init__(
             self, Z, Phi, Phi_moe, Pr_b, sigma,
-            theta, max_iter_kmeans, epsilon_kmeans,
-            epsilon_harmony, K, block_size,
+            theta, max_iter_harmony, max_iter_kmeans, 
+            epsilon_kmeans, epsilon_harmony, K, block_size,
             lamb, verbose
     ):
         self.Z_corr = np.array(Z)
@@ -168,7 +169,7 @@ class Harmony(object):
 
         self.allocate_buffers()
         self.init_cluster()
-        self.harmonize(self.max_iter_kmeans, self.verbose)
+        self.harmonize(self.max_iter_harmony, self.verbose)
 
     def result(self):
         return self.Z_corr

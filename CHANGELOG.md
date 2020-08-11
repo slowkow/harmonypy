@@ -1,3 +1,10 @@
+# 0.0.5 - 2020-08-11
+
+- Expose `max_iter_harmony` as a new top-level argument, in addition to the
+  previously exposed `max_iter_kmeans`. This more closely resembles the
+  original interface in the harmony R package. Thanks to @pinin4fjords
+  for pull request #8
+
 # 0.0.4 - 2020-03-02
 
 - Fix a bug in the LISI code that sometimes causes computation to break. Thanks

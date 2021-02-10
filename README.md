@@ -1,7 +1,7 @@
 harmonypy
 =========
 
-[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi]
+[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi] [![DOI](https://zenodo.org/badge/229105533.svg)](https://zenodo.org/badge/latestdoi/229105533)
 
 [pb]: https://img.shields.io/pypi/v/harmonypy.svg
 [pypi]: https://pypi.org/project/harmonypy/

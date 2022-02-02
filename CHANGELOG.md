@@ -1,3 +1,10 @@
+# 0.0.6 - 2022-02-02
+
+- Replace `scipy.cluster.vq.kmeans` with `scipy.cluster.vq.kmeans2` to address
+  issue #10 where we learned that kmeans does not always return k centroids,
+  but kmeans2 does return k centroids. Thanks to @onionpork and @DennisPost10
+  for reporting this.
+
 # 0.0.5 - 2020-08-11
 
 - Expose `max_iter_harmony` as a new top-level argument, in addition to the

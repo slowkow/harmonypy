@@ -17,7 +17,8 @@
 
 import pandas as pd
 import numpy as np
-from scipy.cluster.vq import kmeans
+# kmeans does not always return k centroids, but kmeans2 does
+from scipy.cluster.vq import kmeans2
 import logging
 
 # create logger
@@ -185,8 +186,8 @@ class Harmony(object):
 
     def init_cluster(self):
         # Start with cluster centroids
-        km = kmeans(self.Z_cos.T, self.K, iter=10)
-        self.Y = km[0].T
+        km_centroids, km_labels = kmeans2(self.Z_cos.T, self.K, minit='++')
+        self.Y = km_centroids.T
         # (1) Normalize
         self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)
         # (2) Assign cluster probabilities

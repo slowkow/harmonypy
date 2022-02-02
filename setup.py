@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name                          = "harmonypy",
-    version                       = "0.0.5",
+    version                       = "0.0.6",
     author                        = "Kamil Slowikowski",
     author_email                  = "kslowikowski@gmail.com",
     description                   = "A data integration algorithm.",

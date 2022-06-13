@@ -1,3 +1,16 @@
+# 0.0.8 - 2022-06-13
+
+- Fully typed
+
+# 0.0.7 - 2022-06-03
+
+- Replace `setup.py` with `pyproject.toml`
+- Remove the `lisi` submodule as it was not used
+- Replace use of the standard logging module with `structlog`
+- Replace previous testing script with pytest unittests
+  - Now including data from the R version for use in testing
+- Moved the `Harmony` class to its own submodule for obscure type-hinting reasons
+
 # 0.0.6 - 2022-02-02
 
 - Replace `scipy.cluster.vq.kmeans` with `scipy.cluster.vq.kmeans2` to address

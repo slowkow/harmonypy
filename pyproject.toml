@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "harmonypy"
+version = "0.0.7"
+description = "A data integration algorithm."
+authors = ["Kamil Slowikowski <kslowikowski@gmail.com>"]
+license = "GPLv3"
+homepage = "https://github.com/slowkow/harmonypy"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+]
+repository  = "https://github.com/slowkow/harmonypy"
+readme = "README.md"
+keywords = [
+    "data-science",
+    "data-integration"
+]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.11"
+pandas = "^1.4.2"
+numpy = "^1.22.4"
+scipy = "^1.8.1"
+numba = "^0.55.2"
+structlog = "^21.5.0"
+rich = "^12.4.4"
+typeguard = "^2.13.3"
+pytest = "^7.1.2"
+tqdm = "^4.64.0"
+
+[tool.poetry.dev-dependencies]
+black = "^22.3.0"
+mypy = "^0.960"
+isort = "^5.10.1"
+ipython = "^8.4.0"
+muon = "^0.1.2"
+zarr = "^2.11.3"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

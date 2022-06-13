@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"*.dvc": "yaml",
+			"dvc.lock": "yaml",
+			"*.rmd": "markdown",
+			"chrono": "c",
+			"complex": "c"
+		}
+	}
+}

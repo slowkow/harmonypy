@@ -17,8 +17,8 @@
 
 import pandas as pd
 import numpy as np
-# kmeans does not always return k centroids, but kmeans2 does
 from scipy.cluster.vq import kmeans2
+from sklearn.cluster import KMeans
 import logging
 
 # create logger
@@ -186,7 +186,12 @@ class Harmony(object):
 
     def init_cluster(self):
         # Start with cluster centroids
-        km_centroids, km_labels = kmeans2(self.Z_cos.T, self.K, minit='++')
+        logger.info("Computing initial centroids with sklearn.KMeans...")
+        model = KMeans(n_clusters=self.K, init='k-means++',
+                       n_init=10, max_iter=25)
+        model.fit(self.Z_cos.T)
+        km_centroids, km_labels = model.cluster_centers_, model.labels_
+        logger.info("sklearn.KMeans initialization complete.")
         self.Y = km_centroids.T
         # (1) Normalize
         self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)

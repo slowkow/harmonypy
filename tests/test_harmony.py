@@ -9,8 +9,8 @@ from time import time
 
 def test_run_harmony():
 
-    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep = "\t")
-    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep = "\t")
+    meta_data = pd.read_csv("harmonypy/data/pbmc_3500_meta.tsv.gz", sep = "\t")
+    data_mat = pd.read_csv("harmonypy/data/pbmc_3500_pcs.tsv.gz", sep = "\t")
 
     start = time()
     ho = hm.run_harmony(data_mat, meta_data, ['donor'])
@@ -19,9 +19,9 @@ def test_run_harmony():
 
     res = pd.DataFrame(ho.Z_corr).T
     res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
-    res.to_csv("data/pbmc_3500_pcs_harmonized_python.tsv.gz", sep = "\t", index = False)
+    # res.to_csv("harmonypy/data/pbmc_3500_pcs_harmonized_python.tsv.gz", sep = "\t", index = False)
 
-    harm = pd.read_csv("data/pbmc_3500_pcs_harmonized.tsv.gz", sep = "\t")
+    harm = pd.read_csv("harmonypy/data/pbmc_3500_pcs_harmonized.tsv.gz", sep = "\t")
 
     cors = []
     for i in range(res.shape[1]):

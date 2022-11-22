@@ -24,4 +24,6 @@ setuptools.setup(
     ],
     python_requires='>=3.6',
     install_requires=['pandas','numpy','scipy', 'scikit-learn'],
+    include_package_data=True,
+    exclude_package_data={"harmonypy.data": ["*"]},
 )

@@ -4,14 +4,14 @@ import numpy as np
 
 def test_lisi():
 
-    X = pd.read_csv("harmonypy/data/lisi_x.tsv.gz", sep = "\t")
-    metadata = pd.read_csv("harmonypy/data/lisi_metadata.tsv.gz", sep = "\t")
+    X = pd.read_csv("data/lisi_x.tsv.gz", sep = "\t")
+    metadata = pd.read_csv("data/lisi_metadata.tsv.gz", sep = "\t")
     label_colnames = metadata.columns
     perplexity = 30
 
     lisi = hm.compute_lisi(X, metadata, label_colnames, perplexity)
 
-    lisi_test = pd.read_csv("harmonypy/data/lisi_lisi.tsv.gz", sep="\t")
+    lisi_test = pd.read_csv("data/lisi_lisi.tsv.gz", sep="\t")
     lisi_test = lisi_test.iloc[:,-2:].to_numpy()
 
     assert np.allclose(lisi, lisi_test)

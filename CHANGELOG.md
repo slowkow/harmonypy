@@ -1,3 +1,9 @@
+# 0.0.7 - 2022-11-22
+
+- Replace `scipy.cluster.vq.kmeans2` with the faster function
+  `sklearn.cluster.KMeans`. Thanks to @johnarevalo for providing details about
+  the running time with both functions in PR #20.
+
 # 0.0.6 - 2022-02-02
 
 - Replace `scipy.cluster.vq.kmeans` with `scipy.cluster.vq.kmeans2` to address

@@ -1,3 +1,8 @@
+# 0.0.9 - 2022-11-23
+
+- Stop excluding `README.md` from the build, because setup.py depends on this
+  file.
+
 # 0.0.8 - 2022-11-22
 
 - Replace `scipy.cluster.vq.kmeans2` with the faster function

@@ -17,7 +17,6 @@
 
 import pandas as pd
 import numpy as np
-from scipy.cluster.vq import kmeans2
 from sklearn.cluster import KMeans
 import logging
 

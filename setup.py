@@ -12,7 +12,6 @@ setuptools.setup(
     long_description              = long_description,
     long_description_content_type = "text/markdown",
     url                           = "https://github.com/slowkow/harmonypy",
-    packages                      = setuptools.find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
@@ -24,6 +23,6 @@ setuptools.setup(
     ],
     python_requires='>=3.6',
     install_requires=['pandas','numpy','scipy', 'scikit-learn'],
+    packages=setuptools.find_packages(),
     include_package_data=True,
-    exclude_package_data={"": ["data"]},
 )

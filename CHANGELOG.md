@@ -1,4 +1,4 @@
-# 0.0.7 - 2022-11-22
+# 0.0.8 - 2022-11-22
 
 - Replace `scipy.cluster.vq.kmeans2` with the faster function
   `sklearn.cluster.KMeans`. Thanks to @johnarevalo for providing details about

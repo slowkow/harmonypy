@@ -123,7 +123,8 @@ def run_harmony(
 
     ho = Harmony(
         data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
-        epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose
+        epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose,
+        random_state
     )
 
     return ho
@@ -133,7 +134,7 @@ class Harmony(object):
             self, Z, Phi, Phi_moe, Pr_b, sigma,
             theta, max_iter_harmony, max_iter_kmeans, 
             epsilon_kmeans, epsilon_harmony, K, block_size,
-            lamb, verbose
+            lamb, verbose, random_state=None
     ):
         self.Z_corr = np.array(Z)
         self.Z_orig = np.array(Z)
@@ -169,7 +170,7 @@ class Harmony(object):
         self.kmeans_rounds  = []
 
         self.allocate_buffers()
-        self.init_cluster()
+        self.init_cluster(random_state)
         self.harmonize(self.max_iter_harmony, self.verbose)
 
     def result(self):
@@ -183,11 +184,11 @@ class Harmony(object):
         self.W           = np.zeros((self.B + 1, self.d))
         self.Phi_Rk      = np.zeros((self.B + 1, self.N))
 
-    def init_cluster(self):
+    def init_cluster(self, random_state):
         # Start with cluster centroids
         logger.info("Computing initial centroids with sklearn.KMeans...")
         model = KMeans(n_clusters=self.K, init='k-means++',
-                       n_init=10, max_iter=25)
+                       n_init=10, max_iter=25, random_state=random_state)
         model.fit(self.Z_cos.T)
         km_centroids, km_labels = model.cluster_centers_, model.labels_
         logger.info("sklearn.KMeans initialization complete.")

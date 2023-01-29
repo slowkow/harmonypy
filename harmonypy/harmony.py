@@ -18,7 +18,9 @@
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
+from scipy.cluster.vq import kmeans2
 import logging
+from typing import Literal
 
 # create logger
 logger = logging.getLogger('harmonypy')
@@ -49,6 +51,7 @@ def run_harmony(
     verbose = True,
     reference_values = None,
     cluster_prior = None,
+    kmeans_method: Literal['sklearn_KMeans','scipy_kmeans2'] = 'sklearn_KMeans',
     random_state = 0
 ):
     """Run Harmony.
@@ -67,6 +70,7 @@ def run_harmony(
     # reference_values = None
     # cluster_prior = None
     # random_state = 0
+    # kmeans_method: scipy_kmeans2 for reproducibility, sklearn_KMeans is faster
 
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
@@ -74,6 +78,10 @@ def run_harmony(
 
     assert data_mat.shape[1] == N, \
        "data_mat and meta_data do not have the same number of cells" 
+
+    assert kmeans_method in ['sklearn_KMeans','scipy_kmeans2'], \
+        "specify correct kmeans_method: scipy_kmeans2 guarantee reproducibility; \
+        sklearn_KMeans is supposed to be faster"
 
     if nclust is None:
         nclust = np.min([np.round(N / 30.0), 100]).astype(int)
@@ -124,7 +132,7 @@ def run_harmony(
     ho = Harmony(
         data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
         epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose,
-        random_state
+        kmeans_method, random_state
     )
 
     return ho
@@ -134,7 +142,7 @@ class Harmony(object):
             self, Z, Phi, Phi_moe, Pr_b, sigma,
             theta, max_iter_harmony, max_iter_kmeans, 
             epsilon_kmeans, epsilon_harmony, K, block_size,
-            lamb, verbose, random_state=None
+            lamb, verbose, kmeans_method, random_state=None
     ):
         self.Z_corr = np.array(Z)
         self.Z_orig = np.array(Z)
@@ -168,6 +176,7 @@ class Harmony(object):
         self.objective_kmeans_entropy = []
         self.objective_kmeans_cross   = []
         self.kmeans_rounds  = []
+        self.kmeans_method  = kmeans_method
 
         self.allocate_buffers()
         self.init_cluster(random_state)
@@ -186,11 +195,14 @@ class Harmony(object):
 
     def init_cluster(self, random_state):
         # Start with cluster centroids
-        logger.info("Computing initial centroids with sklearn.KMeans...")
-        model = KMeans(n_clusters=self.K, init='k-means++',
-                       n_init=10, max_iter=25, random_state=random_state)
-        model.fit(self.Z_cos.T)
-        km_centroids, km_labels = model.cluster_centers_, model.labels_
+        logger.info(f"Computing initial centroids with {self.kmeans_method}...")
+        if self.kmeans_method == 'scipy_kmeans2':
+            km_centroids, _ = kmeans2(self.Z_cos.T, self.K, minit='++', seed=random_state)
+        else:
+            model = KMeans(n_clusters=self.K, init='k-means++',
+                        n_init=10, max_iter=25, random_state=random_state)
+            model.fit(self.Z_cos.T)
+            km_centroids, km_labels = model.cluster_centers_, model.labels_
         logger.info("sklearn.KMeans initialization complete.")
         self.Y = km_centroids.T
         # (1) Normalize

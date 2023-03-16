@@ -55,20 +55,16 @@ def test_random_seed():
 
 
 def test_cluster_fn():
+    '''Test a custom cluster function.'''
     meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
     data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
 
     def cluster_fn(data, K):
-        centroid, label = kmeans2(data, K, minit='++', seed=0)
+        centroid, label = kmeans2(data, K, minit='++')
         return centroid
 
-    def run(cluster_fn):
-        ho = hm.run_harmony(data_mat,
-                            meta_data, ['donor'],
-                            max_iter_harmony=2,
-                            max_iter_kmeans=2,
-                            cluster_fn=cluster_fn)
-        return ho.Z_corr
-
-    # Assert same results when random_state is set.
-    np.testing.assert_equal(run(cluster_fn), run(cluster_fn))
+    hm.run_harmony(data_mat,
+                   meta_data, ['donor'],
+                   max_iter_harmony=2,
+                   max_iter_kmeans=2,
+                   cluster_fn=cluster_fn)

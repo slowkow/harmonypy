@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from functools import partial
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
@@ -49,7 +50,8 @@ def run_harmony(
     verbose = True,
     reference_values = None,
     cluster_prior = None,
-    random_state = 0
+    random_state = 0,
+    cluster_fn = 'kmeans'
 ):
     """Run Harmony.
     """
@@ -67,6 +69,7 @@ def run_harmony(
     # reference_values = None
     # cluster_prior = None
     # random_state = 0
+    # cluster_fn = 'kmeans'. Also accepts a callable object with data, num_clusters parameters
 
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
@@ -123,7 +126,8 @@ def run_harmony(
 
     ho = Harmony(
         data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
-        epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose
+        epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose,
+        random_state, cluster_fn
     )
 
     return ho
@@ -133,7 +137,7 @@ class Harmony(object):
             self, Z, Phi, Phi_moe, Pr_b, sigma,
             theta, max_iter_harmony, max_iter_kmeans, 
             epsilon_kmeans, epsilon_harmony, K, block_size,
-            lamb, verbose
+            lamb, verbose, random_state=None, cluster_fn='kmeans'
     ):
         self.Z_corr = np.array(Z)
         self.Z_orig = np.array(Z)
@@ -169,7 +173,9 @@ class Harmony(object):
         self.kmeans_rounds  = []
 
         self.allocate_buffers()
-        self.init_cluster()
+        if cluster_fn == 'kmeans':
+            cluster_fn = partial(Harmony._cluster_kmeans, random_state=random_state)
+        self.init_cluster(cluster_fn)
         self.harmonize(self.max_iter_harmony, self.verbose)
 
     def result(self):
@@ -183,15 +189,19 @@ class Harmony(object):
         self.W           = np.zeros((self.B + 1, self.d))
         self.Phi_Rk      = np.zeros((self.B + 1, self.N))
 
-    def init_cluster(self):
+    @staticmethod
+    def _cluster_kmeans(data, K, random_state):
         # Start with cluster centroids
         logger.info("Computing initial centroids with sklearn.KMeans...")
-        model = KMeans(n_clusters=self.K, init='k-means++',
-                       n_init=10, max_iter=25)
-        model.fit(self.Z_cos.T)
+        model = KMeans(n_clusters=K, init='k-means++',
+                       n_init=10, max_iter=25, random_state=random_state)
+        model.fit(data)
         km_centroids, km_labels = model.cluster_centers_, model.labels_
         logger.info("sklearn.KMeans initialization complete.")
-        self.Y = km_centroids.T
+        return km_centroids
+
+    def init_cluster(self, cluster_fn):
+        self.Y = cluster_fn(self.Z_cos.T, self.K).T
         # (1) Normalize
         self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)
         # (2) Assign cluster probabilities

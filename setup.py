@@ -7,7 +7,7 @@ exec(open('harmonypy/version.py').read())
 
 setuptools.setup(
     name                          = "harmonypy",
-    version                       = __version__,
+    version                       = __version__, # noqa: F821
     author                        = "Kamil Slowikowski",
     author_email                  = "kslowikowski@gmail.com",
     description                   = "A data integration algorithm.",

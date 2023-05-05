@@ -3,9 +3,11 @@ import setuptools
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
+exec(open('harmonypy/version.py').read())
+
 setuptools.setup(
     name                          = "harmonypy",
-    version                       = "0.0.9",
+    version                       = __version__,
     author                        = "Kamil Slowikowski",
     author_email                  = "kslowikowski@gmail.com",
     description                   = "A data integration algorithm.",

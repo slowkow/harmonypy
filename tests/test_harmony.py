@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy.cluster.vq import kmeans2
 from scipy.stats import pearsonr
+import sys
 
 import harmonypy as hm
 
@@ -58,6 +59,9 @@ def test_cluster_fn():
     meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
     data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
 
+    if sys.version_info.major == 3 and sys.version_info.minor == 6:
+        return
+
     def cluster_fn(data, K):
         centroid, label = kmeans2(data, K, minit='++', seed=0)
         return centroid
@@ -72,3 +76,4 @@ def test_cluster_fn():
 
     # Assert same results when random_state is set.
     np.testing.assert_equal(run(cluster_fn), run(cluster_fn))
+

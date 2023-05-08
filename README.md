@@ -1,8 +1,10 @@
 harmonypy
 =========
 
-[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi] [![DOI](https://zenodo.org/badge/229105533.svg)](https://zenodo.org/badge/latestdoi/229105533)
+[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi] [![tests][gb]][yml]  [![DOI](https://zenodo.org/badge/229105533.svg)](https://zenodo.org/badge/latestdoi/229105533)
 
+[gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
+[yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
 [pb]: https://img.shields.io/pypi/v/harmonypy.svg
 [pypi]: https://pypi.org/project/harmonypy/
 

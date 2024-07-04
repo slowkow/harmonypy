@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harmonypy"
+dynamic = ["version"]
+description = "A data integration algorithm."
+readme = "README.md"
+license = ""
+requires-python = ">=3.6"
+authors = [
+    { name = "Kamil Slowikowski", email = "kslowikowski@gmail.com" },
+    { name = "John Arevalo" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+]
+
+[project.urls]
+Homepage = "https://github.com/slowkow/harmonypy"
+
+[tool.hatch.version]
+path = "harmonypy/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/harmonypy",
+]
+
+[tool.hatch.envs.test]
+dependencies = [
+  "pytest"
+]

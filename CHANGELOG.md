@@ -1,3 +1,8 @@
+# 0.0.10 - 2024-07-04
+
+- Migrate to hatch to ease development and include multiple authors.
+- Add @johnarevalo to the author list.
+
 # 0.0.9 - 2022-11-23
 
 - Stop excluding `README.md` from the build, because setup.py depends on this

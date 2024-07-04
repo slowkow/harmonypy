@@ -1,6 +1,4 @@
 include README.md
 prune data*
 prune tests*
-exclude publish_to_pypi.md
 exclude MANIFEST.in
-exclude Makefile

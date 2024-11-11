@@ -16,9 +16,23 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from functools import partial
-import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
+GPU = False
+try:
+    import cudf as pd
+    GPU = True
+except ImportError:
+    import pandas as pd
+
+try:
+    import cupy as np
+except ImportError:
+    import numpy as np
+
+try:
+    from cuml.cluster import KMeans
+except ImportError:
+    from sklearn.cluster import KMeans
+
 import logging
 
 # create logger
@@ -38,14 +52,14 @@ def run_harmony(
     vars_use,
     theta = None,
     lamb = None,
-    sigma = 0.1, 
+    sigma = 0.1,
     nclust = None,
     tau = 0,
-    block_size = 0.05, 
+    block_size = 0.05,
     max_iter_harmony = 10,
     max_iter_kmeans = 20,
     epsilon_cluster = 1e-5,
-    epsilon_harmony = 1e-4, 
+    epsilon_harmony = 1e-4,
     plot_convergence = False,
     verbose = True,
     reference_values = None,
@@ -76,13 +90,14 @@ def run_harmony(
         data_mat = data_mat.T
 
     assert data_mat.shape[1] == N, \
-       "data_mat and meta_data do not have the same number of cells" 
+       "data_mat and meta_data do not have the same number of cells"
 
     if nclust is None:
-        nclust = np.min([np.round(N / 30.0), 100]).astype(int)
+        nclust = min([np.round(N / 30.0), 100])
 
     if type(sigma) is float and nclust > 1:
-        sigma = np.repeat(sigma, nclust)
+        # import pdb; pdb.set_trace()
+        sigma = np.repeat(np.asarray(sigma), nclust)
 
     if isinstance(vars_use, str):
         vars_use = [vars_use]
@@ -90,8 +105,11 @@ def run_harmony(
     phi = pd.get_dummies(meta_data[vars_use]).to_numpy().T
     phi_n = meta_data[vars_use].describe().loc['unique'].to_numpy().astype(int)
 
+    if GPU:
+        phi = np.asarray(phi)
+
     if theta is None:
-        theta = np.repeat([1] * len(phi_n), phi_n)
+        theta = np.repeat(np.asarray(1) * len(phi_n), int(phi_n))
     elif isinstance(theta, float) or isinstance(theta, int):
         theta = np.repeat([theta] * len(phi_n), phi_n)
     elif len(theta) == len(phi_n):
@@ -101,7 +119,7 @@ def run_harmony(
         "each batch variable must have a theta"
 
     if lamb is None:
-        lamb = np.repeat([1] * len(phi_n), phi_n)
+        lamb = np.repeat(np.asarray(1) * len(phi_n), int(phi_n))
     elif isinstance(lamb, float) or isinstance(lamb, int):
         lamb = np.repeat([lamb] * len(phi_n), phi_n)
     elif len(lamb) == len(phi_n):
@@ -118,9 +136,17 @@ def run_harmony(
     if tau > 0:
         theta = theta * (1 - np.exp(-(N_b / (nclust * tau)) ** 2))
 
-    lamb_mat = np.diag(np.insert(lamb, 0, 0))
+    if GPU:
+        index = 0
+        value = 0
+        lamb_mat = np.empty(len(lamb) + 1, dtype=lamb.dtype)
+        np.put(lamb_mat, np.arange(index), lamb[:index])
+        np.put(lamb_mat, index, value)
+        np.put(lamb_mat, np.arange(index + 1, len(lamb_mat)), lamb[index:])
+    else:
+        lamb_mat = np.diag(np.insert(lamb, 0, 0))
 
-    phi_moe = np.vstack((np.repeat(1, N), phi))
+    phi_moe = np.vstack((np.repeat(np.asarray(1), N), phi))
 
     np.random.seed(random_state)
 
@@ -135,12 +161,16 @@ def run_harmony(
 class Harmony(object):
     def __init__(
             self, Z, Phi, Phi_moe, Pr_b, sigma,
-            theta, max_iter_harmony, max_iter_kmeans, 
+            theta, max_iter_harmony, max_iter_kmeans,
             epsilon_kmeans, epsilon_harmony, K, block_size,
             lamb, verbose, random_state=None, cluster_fn='kmeans'
     ):
-        self.Z_corr = np.array(Z)
-        self.Z_orig = np.array(Z)
+        if GPU:
+            self.Z_corr = Z.to_cupy()
+            self.Z_orig = Z.to_cupy()
+        else:
+            self.Z_corr = np.array(Z)
+            self.Z_orig = np.array(Z)
 
         self.Z_cos = self.Z_orig / self.Z_orig.max(axis=0)
         self.Z_cos = self.Z_cos / np.linalg.norm(self.Z_cos, ord=2, axis=0)
@@ -293,7 +323,7 @@ class Harmony(object):
         update_order = np.arange(self.N)
         np.random.shuffle(update_order)
         n_blocks = np.ceil(1 / self.block_size).astype(int)
-        blocks = np.array_split(update_order, n_blocks)
+        blocks = np.array_split(update_order, int(n_blocks))
         for b in blocks:
             # STEP 1: Remove cells
             self.E -= np.outer(np.sum(self.R[:,b], axis=1), self.Pr_b)

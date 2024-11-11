@@ -15,9 +15,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import numpy as np
-import pandas as pd
-from sklearn.neighbors import NearestNeighbors
+try:
+    import cudf as pd
+    from cudf.core.dtypes import CategoricalDtype as Categorical
+except ImportError:
+    import pandas as pd
+    from pandas import Categorical
+
+try:
+    import cupy as np
+except ImportError:
+    import numpy as np
+
+try:
+    from cuml.neighbors import NearestNeighbors
+except ImportError:
+    from sklearn.neighbors import NearestNeighbors
 from typing import Iterable
 
 
@@ -41,7 +54,7 @@ def compute_lisi(
 
         - If LISI is approximately equal to 1, then the item is surrounded by
           neighbors from 1 category.
-    
+
     The LISI statistic is useful to evaluate whether multiple datasets are
     well-integrated by algorithms such as Harmony [1].
 
@@ -68,7 +81,7 @@ def compute_lisi(
 def compute_simpson(
     distances: np.ndarray,
     indices: np.ndarray,
-    labels: pd.Categorical,
+    labels: Categorical,
     n_categories: int,
     perplexity: float,
     tol: float=1e-5

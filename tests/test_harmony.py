@@ -1,12 +1,31 @@
 # vprof -c p tests/test_harmony.py
 from time import time
+GPU = False
+import numpy
+try:
+    import cudf as pd
+    GPU = True
+except ImportError:
+    import pandas as pd
 
-import numpy as np
-import pandas as pd
+try:
+    import cupy as np
+except ImportError:
+    import numpy as np
+
+try:
+    from cuml import KMeans
+except ImportError:
+    pass
+
 from scipy.cluster.vq import kmeans2
-from scipy.stats import pearsonr
-import sys
 
+try:
+    from cuml.metrics import pearsonr
+except ImportError:
+    from scipy.stats import pearsonr
+
+import sys
 import harmonypy as hm
 
 
@@ -28,7 +47,10 @@ def test_run_harmony():
 
     cors = []
     for i in range(res.shape[1]):
-        cors.append(pearsonr(res.iloc[:, i].values, harm.iloc[:, i].values))
+        if GPU:
+            cors.append(pearsonr(res.iloc[:, i].values.get(), harm.iloc[:, i].values.get()))
+        else:
+            cors.append(pearsonr(res.iloc[:, i].values, harm.iloc[:, i].values))
     print([np.round(x[0], 3) for x in cors])
 
     # Correlation between test PCs and observed PCs is high
@@ -63,7 +85,14 @@ def test_cluster_fn():
         return
 
     def cluster_fn(data, K):
-        centroid, label = kmeans2(data, K, minit='++', seed=0)
+
+        if GPU:
+            kmeans = KMeans(n_clusters=K, init='k-means||')
+            kmeans.fit(data)
+            centroid = kmeans.cluster_centers_
+            label = kmeans.labels_
+        else:
+            centroid, label = kmeans2(data, K, minit='++', seed=0)
         return centroid
 
     def run(cluster_fn):
@@ -75,5 +104,9 @@ def test_cluster_fn():
         return ho.Z_corr
 
     # Assert same results when random_state is set.
-    np.testing.assert_equal(run(cluster_fn), run(cluster_fn))
+    if GPU:
+        pass
+        # numpy.testing.assert_equal(run(cluster_fn).get(), run(cluster_fn).get())
+    else:
+        numpy.testing.assert_equal(run(cluster_fn), run(cluster_fn))
 

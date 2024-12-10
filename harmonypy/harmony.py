@@ -16,21 +16,18 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from functools import partial
+
+import cupy
+
 GPU = False
-try:
+if cupy.cuda.is_available():
     import cudf as pd
-    GPU = True
-except ImportError:
-    import pandas as pd
-
-try:
     import cupy as np
-except ImportError:
-    import numpy as np
-
-try:
     from cuml.cluster import KMeans
-except ImportError:
+    GPU = True
+else:
+    import pandas as pd
+    import numpy as np
     from sklearn.cluster import KMeans
 
 import logging

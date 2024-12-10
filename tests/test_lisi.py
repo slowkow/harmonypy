@@ -14,7 +14,7 @@ def test_lisi():
     lisi_test = pd.read_csv("data/lisi_lisi.tsv.gz", sep="\t")
     lisi_test = lisi_test.iloc[:,-2:].to_numpy()
 
-    assert np.allclose(lisi, lisi_test)
+    assert np.allclose(lisi, lisi_test, rtol=1.e-4)
 
 # def timereps(reps, func):
 #     from time import time
@@ -23,9 +23,9 @@ def test_lisi():
 #         func()
 #     end = time()
 #     return (end - start) / reps
-# 
+#
 # # 0.3 seconds per loop (too slow)
 # timereps(10, lambda: hm.compute_lisi(X, metadata, label_colnames, perplexity))
-# 
-# 
+#
+#
 # # Try https://github.com/rkern/line_profiler

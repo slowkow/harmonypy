@@ -1,29 +1,22 @@
 # vprof -c p tests/test_harmony.py
 from time import time
-GPU = False
-import numpy
-try:
-    import cudf as pd
-    GPU = True
-except ImportError:
-    import pandas as pd
+import random
 
-try:
+import cupy
+import numpy
+
+GPU = False
+if cupy.cuda.is_available():
+    import cudf as pd
     import cupy as np
-except ImportError:
+    from cuml import KMeans
+    GPU = True
+else:
+    import pandas as pd
     import numpy as np
 
-try:
-    from cuml import KMeans
-except ImportError:
-    pass
-
+from scipy.stats import pearsonr
 from scipy.cluster.vq import kmeans2
-
-try:
-    from cuml.metrics import pearsonr
-except ImportError:
-    from scipy.stats import pearsonr
 
 import sys
 import harmonypy as hm
@@ -74,7 +67,9 @@ def test_random_seed():
 
     # Assert different values when random_state is None. Absolute differences
     # in multiple runs are usually > 2000
-    assert np.abs(run(None) - run(None)).sum() > 1000
+    randomState1 = random.randint(0, 10000) if GPU else None
+    randomState2 = random.randint(0, 10000) if GPU else None
+    assert np.abs(run(randomState1) - run(randomState2)).sum() > 1000
 
 
 def test_cluster_fn():

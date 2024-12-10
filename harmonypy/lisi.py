@@ -15,22 +15,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-try:
+import cupy
+
+GPU = False
+if cupy.cuda.is_available():
     import cudf as pd
-    from cudf.core.dtypes import CategoricalDtype as Categorical
-except ImportError:
-    import pandas as pd
-    from pandas import Categorical
-
-try:
     import cupy as np
-except ImportError:
-    import numpy as np
-
-try:
+    from cudf.core.dtypes import CategoricalDtype as Categorical
     from cuml.neighbors import NearestNeighbors
-except ImportError:
+    GPU = True
+else:
+    import pandas as pd
+    import numpy as np
+    from pandas import Categorical
     from sklearn.neighbors import NearestNeighbors
+
 from typing import Iterable
 
 
@@ -63,15 +62,21 @@ def compute_lisi(
     n_cells = metadata.shape[0]
     n_labels = len(label_colnames)
     # We need at least 3 * n_neigbhors to compute the perplexity
-    knn = NearestNeighbors(n_neighbors = perplexity * 3, algorithm = 'kd_tree').fit(X)
+    algo = 'auto' if GPU else 'kd_tree'
+    knn = NearestNeighbors(n_neighbors = perplexity * 3, algorithm = algo).fit(X)
     distances, indices = knn.kneighbors(X)
     # Don't count yourself
-    indices = indices[:,1:]
-    distances = distances[:,1:]
+    if GPU:
+        indices = indices.iloc[:,1:]
+        distances = distances.iloc[:,1:]
+    else:
+        indices = indices[:,1:]
+        distances = distances[:,1:]
+
     # Save the result
     lisi_df = np.zeros((n_cells, n_labels))
     for i, label in enumerate(label_colnames):
-        labels = pd.Categorical(metadata[label])
+        labels = Categorical(metadata[label])
         n_categories = len(labels.categories)
         simpson = compute_simpson(distances.T, indices.T, labels, n_categories, perplexity)
         lisi_df[:,i] = 1 / simpson
@@ -96,13 +101,19 @@ def compute_simpson(
         betamin = -np.inf
         betamax = np.inf
         # Compute Hdiff
-        P = np.exp(-distances[:,i] * beta)
+        if GPU:
+            P = np.exp(np.array(-distances.iloc[:,i] * beta))
+        else:
+            P = np.exp(np.array(-distances[:,i] * beta))
         P_sum = np.sum(P)
         if P_sum == 0:
             H = 0
             P = np.zeros(distances.shape[0])
         else:
-            H = np.log(P_sum) + beta * np.sum(distances[:,i] * P) / P_sum
+            if GPU:
+                H = np.log(P_sum) + beta * np.sum(np.array(distances.iloc[:,i]) * P) / P_sum
+            else:
+                H = np.log(P_sum) + beta * np.sum(np.array(distances[:,i]) * P) / P_sum
             P = P / P_sum
         Hdiff = H - logU
         n_tries = 50
@@ -124,22 +135,38 @@ def compute_simpson(
                 else:
                     beta = (beta + betamin) / 2
             # Compute Hdiff
-            P = np.exp(-distances[:,i] * beta)
+            if GPU:
+                P = np.exp(np.array(-distances.iloc[:,i] * beta))
+            else:
+                P = np.exp(np.array(-distances[:,i] * beta))
             P_sum = np.sum(P)
             if P_sum == 0:
                 H = 0
                 P = np.zeros(distances.shape[0])
             else:
-                H = np.log(P_sum) + beta * np.sum(distances[:,i] * P) / P_sum
+                if GPU:
+                    H = np.log(P_sum) + beta * np.sum(np.array(distances.iloc[:,i]) * P) / P_sum
+                else:
+                    H = np.log(P_sum) + beta * np.sum(np.array(distances[:,i]) * P) / P_sum
                 P = P / P_sum
             Hdiff = H - logU
         # distancesefault value
         if H == 0:
             simpson[i] = -1
         # Simpson's index
-        for label_category in labels.categories:
-            ix = indices[:,i]
-            q = labels[ix] == label_category
+        if GPU:
+            labels_alias = labels.categories
+            categories = labels_alias.unique().to_pandas()
+        else:
+            categories = labels.categories
+            labels_alias = labels
+
+        for label_category in categories:
+            if GPU:
+                ix = indices.iloc[:,i]
+            else:
+                ix = indices[:,i]
+            q = labels_alias[ix] == label_category
             if np.any(q):
                 P_sum = np.sum(P[q])
                 simpson[i] += P_sum * P_sum

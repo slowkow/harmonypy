@@ -1,6 +1,17 @@
+import os
 import harmonypy as hm
-import pandas as pd
-import numpy as np
+
+GPU = False
+try:
+    if os.environ.get('HARMONYPY_CPU', '0') == '1':
+        raise ModuleNotFoundError("HARMONYPY_CPU is set to 1")
+    import cudf as pd
+    import cupy as np
+    GPU = True
+except ModuleNotFoundError:
+    import pandas as pd
+    import numpy as np
+
 
 def test_lisi():
 

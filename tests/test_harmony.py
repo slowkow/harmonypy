@@ -1,17 +1,19 @@
 # vprof -c p tests/test_harmony.py
-from time import time
+import os
 import random
-
-import cupy
 import numpy
 
+from time import time
+
 GPU = False
-if cupy.cuda.is_available():
+try:
+    if os.environ.get('HARMONYPY_CPU', '0') == '1':
+        raise ModuleNotFoundError("HARMONYPY_CPU is set to 1")
     import cudf as pd
     import cupy as np
     from cuml import KMeans
     GPU = True
-else:
+except ModuleNotFoundError:
     import pandas as pd
     import numpy as np
 

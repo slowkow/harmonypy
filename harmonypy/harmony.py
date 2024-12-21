@@ -19,6 +19,8 @@ import os
 import logging
 
 from functools import partial
+import numpy
+import pandas as pd
 
 GPU = False
 try:
@@ -46,7 +48,7 @@ logger.addHandler(ch)
 
 def run_harmony(
     data_mat: _np.ndarray,
-    meta_data: _pd.DataFrame,
+    meta_data: pd.DataFrame,
     vars_use,
     theta = None,
     lamb = None,
@@ -83,6 +85,11 @@ def run_harmony(
     # random_state = 0
     # cluster_fn = 'kmeans'. Also accepts a callable object with data, num_clusters parameters
 
+    if GPU == 1 and isinstance(data_mat, numpy.ndarray):
+        data_mat = _np.asarray(data_mat)
+    if GPU == 1 and isinstance(meta_data, _pd.DataFrame):
+        meta_data = meta_data.to_pandas()
+
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
         data_mat = data_mat.T
@@ -94,13 +101,12 @@ def run_harmony(
         nclust = min([_np.round(N / 30.0), 100])
 
     if type(sigma) is float and nclust > 1:
-        # import pdb; pdb.set_trace()
         sigma = _np.repeat(_np.asarray(sigma), nclust)
 
     if isinstance(vars_use, str):
         vars_use = [vars_use]
 
-    phi = _pd.get_dummies(meta_data[vars_use]).to_numpy().T
+    phi = pd.get_dummies(meta_data[vars_use]).to_numpy().T
     phi_n = meta_data[vars_use].describe().loc['unique'].to_numpy().astype(int)
 
     if GPU:
@@ -164,8 +170,12 @@ class Harmony(object):
             lamb, verbose, random_state=None, cluster_fn='kmeans'
     ):
         if GPU:
-            self.Z_corr = Z.to_cupy()
-            self.Z_orig = Z.to_cupy()
+            if isinstance(Z, _pd.DataFrame):
+                self.Z_corr = Z.to_cupy()
+                self.Z_orig = Z.to_cupy()
+            else:
+                self.Z_corr = _np.asarray(Z)
+                self.Z_orig = _np.asarray(Z)
         else:
             self.Z_corr = _np.array(Z)
             self.Z_orig = _np.array(Z)

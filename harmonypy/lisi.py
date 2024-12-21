@@ -16,18 +16,19 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import numpy
+import pandas as pd
+
 GPU = False
 try:
     if os.environ.get('HARMONYPY_CPU', '0') == '1':
         raise ModuleNotFoundError("HARMONYPY_CPU is set to 1")
 
-    import cudf as _pd
     import cupy as _np
     from cudf.core.dtypes import CategoricalDtype as _Categorical
     from cuml.neighbors import NearestNeighbors as _NearestNeighbors
     GPU = True
 except ModuleNotFoundError:
-    import pandas as _pd
     import numpy as _np
     from pandas import Categorical as _Categorical
     from sklearn.neighbors import NearestNeighbors as _NearestNeighbors
@@ -37,7 +38,7 @@ from typing import Iterable
 
 def compute_lisi(
     X: _np.array,
-    metadata: _pd.DataFrame,
+    metadata: pd.DataFrame,
     label_colnames: Iterable[str],
     perplexity: float=30
 ):
@@ -61,6 +62,10 @@ def compute_lisi(
 
     [1]: Korsunsky et al. 2019 doi: 10.1038/s41592-019-0619-0
     """
+
+    if GPU == 1 and isinstance(X, numpy.ndarray):
+        X = _np.asarray(X)
+
     n_cells = metadata.shape[0]
     n_labels = len(label_colnames)
     # We need at least 3 * n_neigbhors to compute the perplexity

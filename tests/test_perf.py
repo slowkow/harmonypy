@@ -38,6 +38,7 @@ def run_it(cpu):
     logging.info("{:.2f} seconds elapsed".format(end - start))
 
 
+@pytest.mark.skip(reason='Not a functional test')
 @pytest.mark.parametrize("test_input", [1, 0])
 def test_in_separate_processes(test_input):
     run_test_in_process(run_it, test_input)

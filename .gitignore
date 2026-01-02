@@ -131,3 +131,5 @@ dmypy.json
 # Data files
 *.gz
 *.swp
+
+.DS_Store

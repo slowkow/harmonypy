@@ -7,7 +7,7 @@ name = "harmonypy"
 dynamic = ["version"]
 description = "A data integration algorithm."
 readme = "README.md"
-license = ""
+license = "mit"
 requires-python = ">=3.6"
 authors = [
     { name = "Kamil Slowikowski", orcid = "0000-0002-2843-6370", email = "kslowikowski@gmail.com" },

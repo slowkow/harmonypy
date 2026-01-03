@@ -147,6 +147,7 @@ class Harmony(object):
 
         self.Phi             = Phi
         self.Phi_moe         = Phi_moe
+        self.Phi_moe_T       = Phi_moe.T.copy()  # Precompute transpose (contiguous)
         self.N               = self.Z_corr.shape[1]
         self.Pr_b            = Pr_b
         self.B               = self.Phi.shape[0] # number of batch variables
@@ -243,10 +244,9 @@ class Harmony(object):
             # STEP 1: Clustering
             self.cluster()
             # STEP 2: Regress out covariates
-            # self.moe_correct_ridge()
             self.Z_cos, self.Z_corr, self.W, self.Phi_Rk = moe_correct_ridge(
                 self.Z_orig, self.Z_cos, self.Z_corr, self.R, self.W, self.K,
-                self.Phi_Rk, self.Phi_moe, self.lamb
+                self.Phi_Rk, self.Phi_moe, self.Phi_moe_T, self.lamb
             )
             # STEP 3: Check for convergence
             converged = self.check_convergence(1)
@@ -309,24 +309,17 @@ class Harmony(object):
         return 0
 
     def check_convergence(self, i_type):
-        obj_old = 0.0
-        obj_new = 0.0
-        # Clustering, compute new window mean
+        # Clustering convergence check
         if i_type == 0:
-            okl = len(self.objective_kmeans)
-            for i in range(self.window_size):
-                obj_old += self.objective_kmeans[okl - 2 - i]
-                obj_new += self.objective_kmeans[okl - 1 - i]
-            if abs(obj_old - obj_new) / abs(obj_old) < self.epsilon_kmeans:
-                return True
-            return False
-        # Harmony
+            w = self.window_size
+            obj_old = sum(self.objective_kmeans[-w-1:-1])
+            obj_new = sum(self.objective_kmeans[-w:])
+            return abs(obj_old - obj_new) / abs(obj_old) < self.epsilon_kmeans
+        # Harmony convergence check
         if i_type == 1:
             obj_old = self.objective_harmony[-2]
             obj_new = self.objective_harmony[-1]
-            if (obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony:
-                return True
-            return False
+            return (obj_old - obj_new) / abs(obj_old) < self.epsilon_harmony
         return True
 
 
@@ -334,13 +327,18 @@ def safe_entropy(x: np.array):
     """Compute x * log(x), returning 0 where x is 0 or negative."""
     with np.errstate(divide='ignore', invalid='ignore'):
         y = x * np.log(x)
-    return np.where(np.isfinite(y), y, 0.0)
+        np.nan_to_num(y, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    return y
 
-def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
-    Z_corr = Z_orig.copy()
+def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, Phi_moe_T, lamb):
+    """Ridge regression correction for batch effects.
+    
+    Modifies Z_corr in-place (passed buffer is reused).
+    """
+    np.copyto(Z_corr, Z_orig)  # Reuse buffer instead of allocating new array
     for i in range(K):
         Phi_Rk = Phi_moe * R[i, :]  # element-wise multiply (broadcast)
-        x = Phi_Rk @ Phi_moe.T + lamb
+        x = Phi_Rk @ Phi_moe_T + lamb
         # Use solve instead of inv for better performance and numerical stability
         W = np.linalg.solve(x, Phi_Rk @ Z_orig.T)
         W[0, :] = 0  # do not remove the intercept

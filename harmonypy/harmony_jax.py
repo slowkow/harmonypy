@@ -94,6 +94,8 @@ def get_jax_device_info():
     # Create helpful message
     if gpu_available:
         message = f"🚀 Running on {device_type}: {device_name}"
+        if 'metal' in device_type.lower():
+            message += " (experimental)"
     else:
         message = f"Running on {device_type}: {device_name}"
         # Add hint for GPU acceleration
@@ -109,6 +111,22 @@ def get_jax_device_info():
         'message': message,
         'gpu_available': gpu_available
     }
+
+
+def _test_jax_backend():
+    """Test if the current JAX backend works by creating a simple array.
+    
+    Returns:
+        bool: True if backend works, False otherwise
+        str: Error message if backend fails, empty string otherwise
+    """
+    try:
+        # Simple test: create a small array and do a basic operation
+        test = jnp.array([1.0, 2.0, 3.0], dtype=jnp.float32)
+        _ = test.sum()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 # =============================================================================
@@ -514,6 +532,22 @@ def run_harmony_jax(
     device_info = get_jax_device_info()
     if verbose:
         logger.info(device_info['message'])
+    
+    # Test if JAX backend works (Metal can have issues)
+    backend_works, error_msg = _test_jax_backend()
+    if not backend_works:
+        if 'UNIMPLEMENTED' in error_msg or 'default_memory_space' in error_msg:
+            raise RuntimeError(
+                f"JAX Metal backend error: {error_msg}\n\n"
+                "The Metal GPU backend is experimental and may not work with all JAX versions.\n"
+                "Try one of these solutions:\n"
+                "  1. Force CPU mode by setting environment variable before importing JAX:\n"
+                "     import os; os.environ['JAX_PLATFORMS'] = 'cpu'\n"
+                "  2. Upgrade jax-metal: pip install --upgrade jax-metal\n"
+                "  3. Use the NumPy version: harmonypy.run_harmony() instead of run_harmony_jax()"
+            )
+        else:
+            raise RuntimeError(f"JAX backend test failed: {error_msg}")
     
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:

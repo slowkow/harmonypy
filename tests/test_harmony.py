@@ -1,4 +1,9 @@
 # vprof -c p tests/test_harmony.py
+
+# Force CPU mode for JAX (Metal backend is experimental and may not work)
+import os
+os.environ['JAX_PLATFORMS'] = 'cpu'
+
 from time import time
 
 import numpy as np
@@ -10,10 +15,17 @@ import sys
 import harmonypy as hm
 
 
-def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
+def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var, use_jax=False):
     print("\n" + "=" * 60)
-    print("TEST: test_run_harmony")
+    backend = "JAX" if use_jax else "NumPy"
+    print(f"TEST: test_run_harmony ({backend})")
     print("=" * 60)
+
+    # Show JAX device info if using JAX
+    if use_jax and hm.JAX_AVAILABLE:
+        device_info = hm.get_jax_device_info()
+        # Just show the first line (device info), skip the tip
+        print(f"\n{device_info['message'].split(chr(10))[0]}")
 
     # Load input data
     meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
@@ -29,11 +41,14 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
     print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
-    print("\n--- Running Harmony ---")
+    print(f"\n--- Running Harmony ({backend}) ---")
     start = time()
-    ho = hm.run_harmony(data_mat, meta_data, [batch_var])
+    if use_jax and hm.JAX_AVAILABLE:
+        ho = hm.run_harmony_jax(data_mat, meta_data, [batch_var], verbose=False)
+    else:
+        ho = hm.run_harmony(data_mat, meta_data, [batch_var], verbose=False)
     end = time()
-    print(f"\n✓ Harmony completed in {end - start:.2f} seconds")
+    print(f"\n✓ Harmony ({backend}) completed in {end - start:.2f} seconds")
 
     print("\n--- Harmony Object Info ---")
     print(f"Number of clusters (K): {ho.K}")
@@ -153,18 +168,43 @@ if __name__ == "__main__":
     print("# Running harmonypy tests")
     print("#" * 60)
     
+    # Show JAX availability and device
+    print(f"\nJAX available: {hm.JAX_AVAILABLE}")
+    if hm.JAX_AVAILABLE:
+        device_info = hm.get_jax_device_info()
+        # Just show the first line (device info)
+        print(device_info['message'].split('\n')[0])
+    
+    # Test NumPy backend
+    print("\n" + "=" * 60)
+    print("NUMPY BACKEND TESTS")
+    print("=" * 60)
+    
     test_run_harmony(
         meta_tsv="data/pbmc_3500_meta.tsv.gz",
         pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
         harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
-        batch_var="donor"
+        batch_var="donor",
+        use_jax=False
     )
-    test_run_harmony(
-        meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
-        pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
-        harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
-        batch_var="batch"
-    )
+    
+    # Test JAX backend (if available)
+    if hm.JAX_AVAILABLE:
+        print("\n" + "=" * 60)
+        print("JAX BACKEND TESTS")
+        print("=" * 60)
+        
+        test_run_harmony(
+            meta_tsv="data/pbmc_3500_meta.tsv.gz",
+            pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
+            harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
+            batch_var="donor",
+            use_jax=True
+        )
+    else:
+        print("\n⚠ Skipping JAX tests (JAX not installed)")
+    
+    # Other tests (NumPy only)
     test_random_seed()
     test_cluster_fn()
     

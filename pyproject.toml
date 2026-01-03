@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A data integration algorithm."
 readme = "README.md"
 license = "mit"
-requires-python = ">=3.6"
+requires-python = ">=3.10"
 authors = [
     { name = "Kamil Slowikowski", orcid = "0000-0002-2843-6370", email = "kslowikowski@gmail.com" },
     { name = "John Arevalo", orcid = "0000-0002-1138-5036", email = "johnarevalo@gmail.com" }
@@ -28,6 +28,9 @@ dependencies = [
     "scikit-learn",
     "scipy",
 ]
+
+[project.optional-dependencies]
+jax = ["jax", "jaxlib"]
 
 [project.urls]
 Homepage = "https://github.com/slowkow/harmonypy"

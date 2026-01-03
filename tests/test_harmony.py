@@ -10,25 +10,28 @@ import sys
 import harmonypy as hm
 
 
-def test_run_harmony():
+def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n" + "=" * 60)
     print("TEST: test_run_harmony")
     print("=" * 60)
 
     # Load input data
-    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
-    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
+    meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
+    data_mat = pd.read_csv(pcs_tsv, sep="\t", low_memory=False)
+
+    if data_mat.iloc[:,0].dtype == 'object':
+        data_mat = data_mat.iloc[:, 1:]
 
     print("\n--- Input Data ---")
     print(f"data_mat shape: {data_mat.shape} (cells × PCs)")
     print(f"meta_data shape: {meta_data.shape}")
     print(f"meta_data columns: {list(meta_data.columns)}")
-    print(f"Batch variable 'donor' unique values: {meta_data['donor'].unique()}")
-    print(f"Cells per donor:\n{meta_data['donor'].value_counts()}")
+    print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
+    print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
     print("\n--- Running Harmony ---")
     start = time()
-    ho = hm.run_harmony(data_mat, meta_data, ['donor'])
+    ho = hm.run_harmony(data_mat, meta_data, [batch_var])
     end = time()
     print(f"\n✓ Harmony completed in {end - start:.2f} seconds")
 
@@ -48,7 +51,9 @@ def test_run_harmony():
     # res.to_csv("data/pbmc_3500_pcs_harmonized_python.tsv.gz", sep = "\t", index = False)
 
     # Compare to expected results from R
-    harm = pd.read_csv("data/pbmc_3500_pcs_harmonized.tsv.gz", sep="\t")
+    harm = pd.read_csv(harmonized_tsv, sep="\t")
+    if harm.iloc[:,0].dtype == 'object':
+        harm = harm.iloc[:, 1:]
     print("\n--- Comparison with R Results ---")
     print(f"Expected result shape: {harm.shape}")
 
@@ -148,7 +153,18 @@ if __name__ == "__main__":
     print("# Running harmonypy tests")
     print("#" * 60)
     
-    test_run_harmony()
+    test_run_harmony(
+        meta_tsv="data/pbmc_3500_meta.tsv.gz",
+        pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
+        harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
+        batch_var="donor"
+    )
+    test_run_harmony(
+        meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
+        pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
+        harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
+        batch_var="sample"
+    )
     test_random_seed()
     test_cluster_fn()
     

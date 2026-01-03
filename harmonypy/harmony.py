@@ -188,15 +188,18 @@ class Harmony(object):
         self.E           = np.zeros((self.K, self.B))
         self.W           = np.zeros((self.B + 1, self.d))
         self.Phi_Rk      = np.zeros((self.B + 1, self.N))
+        # Precompute theta tile (K x B) - used repeatedly in compute_objective
+        self._theta_tile = np.tile(self.theta[:, np.newaxis], self.K).T
 
     @staticmethod
     def _cluster_kmeans(data, K, random_state):
         # Start with cluster centroids
         logger.info("Computing initial centroids with sklearn.KMeans...")
+        # n_init=1 is sufficient since Harmony will refine the clusters
         model = KMeans(n_clusters=K, init='k-means++',
-                       n_init=10, max_iter=25, random_state=random_state)
+                       n_init=1, max_iter=25, random_state=random_state)
         model.fit(data)
-        km_centroids, km_labels = model.cluster_centers_, model.labels_
+        km_centroids = model.cluster_centers_
         logger.info("sklearn.KMeans initialization complete.")
         return km_centroids
 
@@ -205,28 +208,26 @@ class Harmony(object):
         # (1) Normalize
         self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)
         # (2) Assign cluster probabilities
-        self.dist_mat = 2 * (1 - np.dot(self.Y.T, self.Z_cos))
-        self.R = -self.dist_mat
-        self.R = self.R / self.sigma[:,None]
-        self.R -= np.max(self.R, axis = 0)
-        self.R = np.exp(self.R)
-        self.R = self.R / np.sum(self.R, axis = 0)
+        self.dist_mat = 2 * (1 - self.Y.T @ self.Z_cos)
+        self.R = -self.dist_mat / self.sigma[:, None]
+        self.R -= self.R.max(axis=0)
+        np.exp(self.R, out=self.R)
+        self.R /= self.R.sum(axis=0)
         # (3) Batch diversity statistics
-        self.E = np.outer(np.sum(self.R, axis=1), self.Pr_b)
-        self.O = np.inner(self.R , self.Phi)
+        self.E = np.outer(self.R.sum(axis=1), self.Pr_b)
+        self.O = self.R @ self.Phi.T
         self.compute_objective()
         # Save results
         self.objective_harmony.append(self.objective_kmeans[-1])
 
     def compute_objective(self):
-        kmeans_error = np.sum(np.multiply(self.R, self.dist_mat))
+        kmeans_error = np.sum(self.R * self.dist_mat)
         # Entropy
-        _entropy = np.sum(safe_entropy(self.R) * self.sigma[:,np.newaxis])
+        _entropy = np.sum(safe_entropy(self.R) * self.sigma[:, np.newaxis])
         # Cross Entropy
-        x = (self.R * self.sigma[:,np.newaxis])
-        y = np.tile(self.theta[:,np.newaxis], self.K).T
+        x = self.R * self.sigma[:, np.newaxis]
         z = np.log((self.O + 1) / (self.E + 1))
-        w = np.dot(y * z, self.Phi)
+        w = (self._theta_tile * z) @ self.Phi
         _cross_entropy = np.sum(x * w)
         # Save results
         self.objective_kmeans.append(kmeans_error + _entropy + _cross_entropy)
@@ -264,14 +265,13 @@ class Harmony(object):
         # Z_cos has changed
         # R is assumed to not have changed
         # Update Y to match new integrated data
-        self.dist_mat = 2 * (1 - np.dot(self.Y.T, self.Z_cos))
+        self.dist_mat = 2 * (1 - self.Y.T @ self.Z_cos)
         for i in range(self.max_iter_kmeans):
-            # print("kmeans {}".format(i))
             # STEP 1: Update Y
-            self.Y = np.dot(self.Z_cos, self.R.T)
-            self.Y = self.Y / np.linalg.norm(self.Y, ord=2, axis=0)
+            self.Y = self.Z_cos @ self.R.T
+            self.Y /= np.linalg.norm(self.Y, ord=2, axis=0)
             # STEP 2: Update dist_mat
-            self.dist_mat = 2 * (1 - np.dot(self.Y.T, self.Z_cos))
+            self.dist_mat = 2 * (1 - self.Y.T @ self.Z_cos)
             # STEP 3: Update R
             self.update_R()
             # STEP 4: Check for convergence
@@ -285,10 +285,10 @@ class Harmony(object):
         return 0
 
     def update_R(self):
-        self._scale_dist = -self.dist_mat
-        self._scale_dist = self._scale_dist / self.sigma[:,None]
-        self._scale_dist -= np.max(self._scale_dist, axis=0)
-        self._scale_dist = np.exp(self._scale_dist)
+        # Compute scaled distances (in-place operations where possible)
+        np.divide(-self.dist_mat, self.sigma[:, None], out=self._scale_dist)
+        self._scale_dist -= self._scale_dist.max(axis=0)
+        np.exp(self._scale_dist, out=self._scale_dist)
         # Update cells in blocks
         update_order = np.arange(self.N)
         np.random.shuffle(update_order)
@@ -296,21 +296,16 @@ class Harmony(object):
         blocks = np.array_split(update_order, n_blocks)
         for b in blocks:
             # STEP 1: Remove cells
-            self.E -= np.outer(np.sum(self.R[:,b], axis=1), self.Pr_b)
-            self.O -= np.dot(self.R[:,b], self.Phi[:,b].T)
+            self.E -= np.outer(self.R[:, b].sum(axis=1), self.Pr_b)
+            self.O -= self.R[:, b] @ self.Phi[:, b].T
             # STEP 2: Recompute R for removed cells
-            self.R[:,b] = self._scale_dist[:,b]
-            self.R[:,b] = np.multiply(
-                self.R[:,b],
-                np.dot(
-                    np.power((self.E + 1) / (self.O + 1), self.theta),
-                    self.Phi[:,b]
-                )
+            self.R[:, b] = self._scale_dist[:, b] * (
+                np.power((self.E + 1) / (self.O + 1), self.theta) @ self.Phi[:, b]
             )
-            self.R[:,b] = self.R[:,b] / np.linalg.norm(self.R[:,b], ord=1, axis=0)
+            self.R[:, b] /= self.R[:, b].sum(axis=0)
             # STEP 3: Put cells back
-            self.E += np.outer(np.sum(self.R[:,b], axis=1), self.Pr_b)
-            self.O += np.dot(self.R[:,b], self.Phi[:,b].T)
+            self.E += np.outer(self.R[:, b].sum(axis=1), self.Pr_b)
+            self.O += self.R[:, b] @ self.Phi[:, b].T
         return 0
 
     def check_convergence(self, i_type):
@@ -336,18 +331,20 @@ class Harmony(object):
 
 
 def safe_entropy(x: np.array):
-    y = np.multiply(x, np.log(x))
-    y[~np.isfinite(y)] = 0.0
-    return y
+    """Compute x * log(x), returning 0 where x is 0 or negative."""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        y = x * np.log(x)
+    return np.where(np.isfinite(y), y, 0.0)
 
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, lamb):
     Z_corr = Z_orig.copy()
     for i in range(K):
-        Phi_Rk = np.multiply(Phi_moe, R[i,:])
-        x = np.dot(Phi_Rk, Phi_moe.T) + lamb
-        W = np.dot(np.dot(np.linalg.inv(x), Phi_Rk), Z_orig.T)
-        W[0,:] = 0 # do not remove the intercept
-        Z_corr -= np.dot(W.T, Phi_Rk)
+        Phi_Rk = Phi_moe * R[i, :]  # element-wise multiply (broadcast)
+        x = Phi_Rk @ Phi_moe.T + lamb
+        # Use solve instead of inv for better performance and numerical stability
+        W = np.linalg.solve(x, Phi_Rk @ Z_orig.T)
+        W[0, :] = 0  # do not remove the intercept
+        Z_corr -= W.T @ Phi_Rk
     Z_cos = Z_corr / np.linalg.norm(Z_corr, ord=2, axis=0)
     return Z_cos, Z_corr, W, Phi_Rk
 

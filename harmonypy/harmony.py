@@ -18,6 +18,7 @@
 from functools import partial
 import pandas as pd
 import numpy as np
+import scipy.sparse as sp
 from sklearn.cluster import KMeans
 import logging
 
@@ -88,6 +89,8 @@ def run_harmony(
         vars_use = [vars_use]
 
     phi = pd.get_dummies(meta_data[vars_use]).to_numpy().T
+    # Convert Phi to sparse CSC format (efficient for column slicing in update_R)
+    phi_sparse = sp.csc_matrix(phi)
     phi_n = meta_data[vars_use].describe().loc['unique'].to_numpy().astype(int)
 
     if theta is None:
@@ -125,7 +128,7 @@ def run_harmony(
     np.random.seed(random_state)
 
     ho = Harmony(
-        data_mat, phi, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
+        data_mat, phi_sparse, phi_moe, Pr_b, sigma, theta, max_iter_harmony, max_iter_kmeans,
         epsilon_cluster, epsilon_harmony, nclust, block_size, lamb_mat, verbose,
         random_state, cluster_fn
     )
@@ -145,7 +148,8 @@ class Harmony(object):
         self.Z_cos = self.Z_orig / self.Z_orig.max(axis=0)
         self.Z_cos = self.Z_cos / np.linalg.norm(self.Z_cos, ord=2, axis=0)
 
-        self.Phi             = Phi
+        self.Phi             = Phi  # Sparse CSC matrix (B, N)
+        self.Phi_T           = Phi.T.tocsr()  # Sparse CSR for Phi.T operations (N, B)
         self.Phi_moe         = Phi_moe
         self.Phi_moe_T       = Phi_moe.T.copy()  # Precompute transpose (contiguous)
         self.N               = self.Z_corr.shape[1]
@@ -216,7 +220,8 @@ class Harmony(object):
         self.R /= self.R.sum(axis=0)
         # (3) Batch diversity statistics
         self.E = np.outer(self.R.sum(axis=1), self.Pr_b)
-        self.O = self.R @ self.Phi.T
+        # R @ Phi.T where Phi_T is sparse CSR: dense @ sparse -> dense ndarray
+        self.O = np.asarray(self.R @ self.Phi_T)
         self.compute_objective()
         # Save results
         self.objective_harmony.append(self.objective_kmeans[-1])
@@ -228,7 +233,9 @@ class Harmony(object):
         # Cross Entropy
         x = self.R * self.sigma[:, np.newaxis]
         z = np.log((self.O + 1) / (self.E + 1))
-        w = (self._theta_tile * z) @ self.Phi
+        # (K, B) @ sparse(B, N) -> dense (K, N)
+        theta_z = self._theta_tile * z
+        w = np.asarray(theta_z @ self.Phi)  # Works for both sparse and dense
         _cross_entropy = np.sum(x * w)
         # Save results
         self.objective_kmeans.append(kmeans_error + _entropy + _cross_entropy)
@@ -294,18 +301,28 @@ class Harmony(object):
         np.random.shuffle(update_order)
         n_blocks = np.ceil(1 / self.block_size).astype(int)
         blocks = np.array_split(update_order, n_blocks)
+        
+        # Handle sparse Phi
+        is_sparse = sp.issparse(self.Phi)
+        
         for b in blocks:
+            # Get Phi slice for this block (convert to dense for small blocks)
+            if is_sparse:
+                Phi_b = self.Phi[:, b].toarray()
+            else:
+                Phi_b = self.Phi[:, b]
+            
             # STEP 1: Remove cells
             self.E -= np.outer(self.R[:, b].sum(axis=1), self.Pr_b)
-            self.O -= self.R[:, b] @ self.Phi[:, b].T
+            self.O -= self.R[:, b] @ Phi_b.T
             # STEP 2: Recompute R for removed cells
             self.R[:, b] = self._scale_dist[:, b] * (
-                np.power((self.E + 1) / (self.O + 1), self.theta) @ self.Phi[:, b]
+                np.power((self.E + 1) / (self.O + 1), self.theta) @ Phi_b
             )
             self.R[:, b] /= self.R[:, b].sum(axis=0)
             # STEP 3: Put cells back
             self.E += np.outer(self.R[:, b].sum(axis=1), self.Pr_b)
-            self.O += self.R[:, b] @ self.Phi[:, b].T
+            self.O += self.R[:, b] @ Phi_b.T
         return 0
 
     def check_convergence(self, i_type):
@@ -330,19 +347,40 @@ def safe_entropy(x: np.array):
         np.nan_to_num(y, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
     return y
 
+
 def moe_correct_ridge(Z_orig, Z_cos, Z_corr, R, W, K, Phi_Rk, Phi_moe, Phi_moe_T, lamb):
     """Ridge regression correction for batch effects.
     
-    Modifies Z_corr in-place (passed buffer is reused).
+    Optimized version using pre-allocated buffers and efficient NumPy operations.
     """
-    np.copyto(Z_corr, Z_orig)  # Reuse buffer instead of allocating new array
+    d, N = Z_orig.shape
+    B_plus_1 = Phi_moe.shape[0]
+    
+    # Pre-allocate buffers for reuse across iterations
+    Phi_Rk_buf = np.empty((B_plus_1, N), dtype=np.float64)
+    x_buf = np.empty((B_plus_1, B_plus_1), dtype=np.float64)
+    rhs_buf = np.empty((B_plus_1, d), dtype=np.float64)
+    
+    np.copyto(Z_corr, Z_orig)
+    
     for i in range(K):
-        Phi_Rk = Phi_moe * R[i, :]  # element-wise multiply (broadcast)
-        x = Phi_Rk @ Phi_moe_T + lamb
-        # Use solve instead of inv for better performance and numerical stability
-        W = np.linalg.solve(x, Phi_Rk @ Z_orig.T)
-        W[0, :] = 0  # do not remove the intercept
-        Z_corr -= W.T @ Phi_Rk
+        # Reuse buffer: Phi_Rk = Phi_moe * R[i, :]
+        np.multiply(Phi_moe, R[i, :], out=Phi_Rk_buf)
+        
+        # x = Phi_Rk @ Phi_moe_T + lamb
+        np.dot(Phi_Rk_buf, Phi_moe_T, out=x_buf)
+        x_buf += lamb
+        
+        # rhs = Phi_Rk @ Z_orig.T
+        np.dot(Phi_Rk_buf, Z_orig.T, out=rhs_buf)
+        
+        # Solve and zero intercept
+        W = np.linalg.solve(x_buf, rhs_buf)
+        W[0, :] = 0
+        
+        # Update Z_corr in-place
+        Z_corr -= W.T @ Phi_Rk_buf
+    
     Z_cos = Z_corr / np.linalg.norm(Z_corr, ord=2, axis=0)
-    return Z_cos, Z_corr, W, Phi_Rk
+    return Z_cos, Z_corr, W, Phi_Rk_buf
 

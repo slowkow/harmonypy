@@ -57,6 +57,60 @@ def check_jax_available():
         )
 
 
+def get_jax_device_info():
+    """Get information about available JAX devices.
+    
+    Returns:
+        dict with keys: 'device_type', 'device_name', 'message', 'gpu_available'
+    """
+    if not JAX_AVAILABLE:
+        return {
+            'device_type': 'none',
+            'device_name': 'JAX not installed',
+            'message': 'JAX not available',
+            'gpu_available': False
+        }
+    
+    devices = jax.devices()
+    default_device = devices[0] if devices else None
+    backend = jax.default_backend()
+    
+    # Determine device type
+    if backend == 'gpu' or 'gpu' in str(default_device).lower():
+        device_type = 'GPU'
+        gpu_available = True
+    elif backend == 'METAL' or 'metal' in str(default_device).lower():
+        device_type = 'GPU (Metal)'
+        gpu_available = True
+    elif backend == 'tpu':
+        device_type = 'TPU'
+        gpu_available = True
+    else:
+        device_type = 'CPU'
+        gpu_available = False
+    
+    device_name = str(default_device) if default_device else 'unknown'
+    
+    # Create helpful message
+    if gpu_available:
+        message = f"🚀 Running on {device_type}: {device_name}"
+    else:
+        message = f"Running on {device_type}: {device_name}"
+        # Add hint for GPU acceleration
+        import platform
+        if platform.system() == 'Darwin' and platform.machine() == 'arm64':
+            message += "\n   💡 Tip: Install jax-metal for GPU acceleration on Apple Silicon"
+        elif platform.system() == 'Linux':
+            message += "\n   💡 Tip: Install jax[cuda12] for NVIDIA GPU acceleration"
+    
+    return {
+        'device_type': device_type,
+        'device_name': device_name,
+        'message': message,
+        'gpu_available': gpu_available
+    }
+
+
 # =============================================================================
 # JAX-optimized core functions
 # =============================================================================
@@ -457,8 +511,9 @@ def run_harmony_jax(
     check_jax_available()
     
     # Log device info
-    devices = jax.devices()
-    logger.info(f"JAX devices: {devices}")
+    device_info = get_jax_device_info()
+    if verbose:
+        logger.info(device_info['message'])
     
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:

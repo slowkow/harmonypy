@@ -163,7 +163,7 @@ if __name__ == "__main__":
         meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
         pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
         harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
-        batch_var="sample"
+        batch_var="batch"
     )
     test_random_seed()
     test_cluster_fn()

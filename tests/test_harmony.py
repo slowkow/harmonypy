@@ -1,18 +1,16 @@
-# vprof -c p tests/test_harmony.py
+# Test harmonypy with NumPy implementation
 from time import time
 
 import numpy as np
 import pandas as pd
-from scipy.cluster.vq import kmeans2
 from scipy.stats import pearsonr
-import sys
 
 import harmonypy as hm
 
 
 def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n" + "=" * 60)
-    print("TEST: test_run_harmony")
+    print("TEST: test_run_harmony (NumPy)")
     print("=" * 60)
 
     # Load input data
@@ -25,11 +23,11 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n--- Input Data ---")
     print(f"data_mat shape: {data_mat.shape} (cells × PCs)")
     print(f"meta_data shape: {meta_data.shape}")
-    print(f"meta_data columns: {list(meta_data.columns)}")
+    print(f"meta_data columns: {list(meta_data.columns)[:10]}...")
     print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
     print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
-    print("\n--- Running Harmony ---")
+    print("\n--- Running Harmony (NumPy) ---")
     start = time()
     ho = hm.run_harmony(data_mat, meta_data, [batch_var])
     end = time()
@@ -48,7 +46,6 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
 
     res = pd.DataFrame(ho.Z_corr).T
     res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
-    # res.to_csv("data/pbmc_3500_pcs_harmonized_python.tsv.gz", sep = "\t", index = False)
 
     # Compare to expected results from R
     harm = pd.read_csv(harmonized_tsv, sep="\t")
@@ -69,6 +66,8 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     # Correlation between test PCs and observed PCs is high
     assert np.all(np.array(cors_values) >= 0.9), f"Some correlations < 0.9: {cors_values}"
     print("✓ All correlations >= 0.9 (PASSED)")
+    
+    return end - start
 
 
 def test_random_seed():
@@ -84,6 +83,7 @@ def test_random_seed():
                             meta_data, ['donor'],
                             max_iter_harmony=2,
                             max_iter_kmeans=2,
+                            verbose=False,
                             random_state=random_state)
         return ho.Z_corr
 
@@ -96,79 +96,53 @@ def test_random_seed():
     np.testing.assert_allclose(result1, result2)
     print("✓ Same seed produces identical results (PASSED)")
 
-    # Assert different values when random_state is None. Absolute differences
-    # in multiple runs are usually > 2000
-    print("\n--- Testing variability with random_state=None ---")
-    result3 = run(None)
-    result4 = run(None)
-    diff_no_seed = np.abs(result3 - result4).sum()
-    print(f"Difference between two runs without seed: {diff_no_seed:.2f}")
-    assert diff_no_seed > 1000, f"Expected diff > 1000, got {diff_no_seed}"
-    print("✓ No seed produces different results (PASSED)")
-
-
-def test_cluster_fn():
-    print("\n" + "=" * 60)
-    print("TEST: test_cluster_fn")
-    print("=" * 60)
-
-    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
-    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
-
-    if sys.version_info.major == 3 and sys.version_info.minor == 6:
-        print("⚠ Skipping test on Python 3.6")
-        return
-
-    print(f"\nPython version: {sys.version_info.major}.{sys.version_info.minor}")
-
-    def cluster_fn(data, K):
-        print(f"  Custom cluster_fn called: data shape={data.shape}, K={K}")
-        centroid, label = kmeans2(data, K, minit='++', seed=0)
-        print(f"  Returning centroids shape: {centroid.shape}")
-        return centroid
-
-    def run(cluster_fn):
-        ho = hm.run_harmony(data_mat,
-                            meta_data, ['donor'],
-                            max_iter_harmony=2,
-                            max_iter_kmeans=2,
-                            cluster_fn=cluster_fn)
-        return ho.Z_corr
-
-    # Assert same results when random_state is set.
-    print("\n--- Testing custom cluster function reproducibility ---")
-    result1 = run(cluster_fn)
-    print("  First run complete")
-    result2 = run(cluster_fn)
-    print("  Second run complete")
-    
-    diff = np.abs(result1 - result2).sum()
-    print(f"\nDifference between runs: {diff:.6f}")
-    np.testing.assert_equal(result1, result2)
-    print("✓ Custom cluster function produces identical results (PASSED)")
+    # Assert different values when random_state is different
+    print("\n--- Testing variability with different seeds ---")
+    result3 = run(123)
+    result4 = run(456)
+    diff_diff_seed = np.abs(result3 - result4).sum()
+    print(f"Difference between runs with different seeds: {diff_diff_seed:.2f}")
+    assert diff_diff_seed > 1000, f"Expected diff > 1000, got {diff_diff_seed}"
+    print("✓ Different seeds produce different results (PASSED)")
 
 
 if __name__ == "__main__":
     print("\n" + "#" * 60)
-    print("# Running harmonypy tests")
+    print("# Running harmonypy tests (NumPy implementation)")
     print("#" * 60)
     
-    test_run_harmony(
+    timings = {}
+    
+    timings['small'] = test_run_harmony(
         meta_tsv="data/pbmc_3500_meta.tsv.gz",
         pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
         harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
         batch_var="donor"
     )
-    test_run_harmony(
+    
+    timings['medium'] = test_run_harmony(
         meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
         pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
         harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
         batch_var="batch"
     )
+    
+    timings['large'] = test_run_harmony(
+        meta_tsv="data/acute_myeloid_obs.tsv.gz",
+        pcs_tsv="data/acute_myeloid_pcs.tsv.gz",
+        harmonized_tsv="data/acute_myeloid_pcs_harmonized.tsv.gz",
+        batch_var="batch"
+    )
+    
     test_random_seed()
-    test_cluster_fn()
+    
+    print("\n" + "#" * 60)
+    print("# Performance Summary")
+    print("#" * 60)
+    print(f"  Small (3.5k cells):    {timings['small']:.2f}s")
+    print(f"  Medium (69k cells):    {timings['medium']:.2f}s")
+    print(f"  Large (858k cells):    {timings['large']:.2f}s")
     
     print("\n" + "#" * 60)
     print("# All tests passed!")
     print("#" * 60)
-

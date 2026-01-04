@@ -230,7 +230,8 @@ class Harmony:
         self.device = device
         
         # Convert to PyTorch tensors on device
-        self.Z_corr = torch.tensor(Z, dtype=torch.float32, device=device)
+        # Store as _Z_corr internally, expose Z_corr as property for backward compatibility
+        self._Z_corr = torch.tensor(Z, dtype=torch.float32, device=device)
         self.Z_orig = torch.tensor(Z, dtype=torch.float32, device=device)
         
         # Simple L2 normalization
@@ -240,9 +241,9 @@ class Harmony:
         self.Phi = torch.tensor(Phi, dtype=torch.float32, device=device)
         self.Pr_b = torch.tensor(Pr_b, dtype=torch.float32, device=device)
         
-        self.N = self.Z_corr.shape[1]
+        self.N = self._Z_corr.shape[1]
         self.B = Phi.shape[0]
-        self.d = self.Z_corr.shape[0]
+        self.d = self._Z_corr.shape[0]
         
         # Build batch index for fast ridge correction
         self.batch_index = []
@@ -280,9 +281,14 @@ class Harmony:
         self.init_cluster(random_state)
         self.harmonize(self.max_iter_harmony, self.verbose)
 
+    @property
+    def Z_corr(self):
+        """Return corrected data as NumPy array (backward compatible)."""
+        return self._Z_corr.cpu().numpy()
+
     def result(self):
         """Return corrected data as NumPy array."""
-        return self.Z_corr.cpu().numpy()
+        return self._Z_corr.cpu().numpy()
 
     def allocate_buffers(self):
         self._scale_dist = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
@@ -464,7 +470,7 @@ class Harmony:
 
     def moe_correct_ridge(self):
         """Ridge regression correction for batch effects."""
-        self.Z_corr = self.Z_orig.clone()
+        self._Z_corr = self.Z_orig.clone()
         
         for k in range(self.K):
             # Compute lambda if estimating
@@ -493,10 +499,10 @@ class Harmony:
                 W = W + inv_cov[:, b+1:b+2] @ batch_sum.T
             
             W[0, :] = 0  # Do not remove intercept
-            self.Z_corr = self.Z_corr - W.T @ Phi_Rk
+            self._Z_corr = self._Z_corr - W.T @ Phi_Rk
         
         # Update Z_cos
-        self.Z_cos = self.Z_corr / torch.linalg.norm(self.Z_corr, ord=2, dim=0)
+        self.Z_cos = self._Z_corr / torch.linalg.norm(self._Z_corr, ord=2, dim=0)
 
 
 def safe_entropy_torch(x):

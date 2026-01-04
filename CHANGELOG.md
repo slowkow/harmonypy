@@ -1,3 +1,25 @@
+# 0.1.0 - 2026-01-03
+
+Major update with PyTorch backend and R package compatibility.
+
+### Breaking Changes
+- Requires Python >= 3.9 (was >= 3.6)
+- New dependency: PyTorch
+
+### New Features
+- PyTorch backend with GPU acceleration (CUDA, MPS) and optimized CPU performance
+- Updated algorithm to match latest R harmony package formulas
+- Dynamic lambda estimation with `lamb=-1` parameter
+- Device selection: `run_harmony(..., device='cuda')` or auto-detect
+
+### Performance
+- 6-14x faster on Apple Silicon (MPS)
+- 2x faster on AMD EPYC (CPU-only)
+- 3-6x faster on NVIDIA GPUs (CUDA)
+
+### Bug Fixes
+- Improved numerical stability for large datasets
+
 # 0.0.10 - 2024-07-04
 
 - Migrate to hatch to ease development and include multiple authors.

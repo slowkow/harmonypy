@@ -20,7 +20,7 @@ Example
   <img src="https://i.imgur.com/lqReopf.gif">
 </p>
 
-This animation shows the Harmony alignment of three single-cell RNA-seq datasets from different donors.
+This animation shows the Harmony alignment of three single-cell RNA-seq datasets from different donors. Before Harmony, we can see that cells are separated by donor — this is likely a technical batch effect that we would like to remove before we proceed with clustering analysis. After Harmony, we can see that the cells from different donors are well-mixed while preserving the general shape of the data.
 
 [→ How to make this animation.](https://slowkow.com/notes/harmony-animation/)
 
@@ -61,20 +61,19 @@ import numpy as np
 import harmonypy as hm
 
 # Load data
-meta = pd.read_csv("data/meta.tsv.gz", sep="\t")
-pcs = pd.read_csv("data/pcs.tsv.gz", sep="\t")
-pcs = np.array(pcs)
+meta = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
+pcs = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
 
-# Run Harmony
-ho = hm.run_harmony(pcs, meta, ['dataset'])
+# Run Harmony to adjust PCs by meta['donor']
+ho = hm.run_harmony(pcs, meta, ['donor'])
 
 # Get corrected PCs as NumPy array
 corrected_pcs = ho.Z_corr.T  # Transpose to cells x PCs
 
 # Write to file
 res = pd.DataFrame(corrected_pcs)
-res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
-res.to_csv("data/adj.tsv.gz", sep="\t", index=False)
+res.columns = ['PC{}_harmony'.format(i + 1) for i in range(res.shape[1])]
+res.to_csv("data/pcs_harmonized.tsv.gz", sep="\t", index=False)
 ```
 
 It is possible to access all of the internal arrays after running Harmony if you want to inspect the results more closely (see the [Supplement](https://static-content.springer.com/esm/art%3A10.1038%2Fs41592-019-0619-0/MediaObjects/41592_2019_619_MOESM1_ESM.pdf) for more information):

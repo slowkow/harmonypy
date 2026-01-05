@@ -12,11 +12,6 @@ Major update with PyTorch backend and R package compatibility.
 - Dynamic lambda estimation with `lamb=-1` parameter
 - Device selection: `run_harmony(..., device='cuda')` or auto-detect
 
-### Performance
-- 6-14x faster on Apple Silicon (MPS)
-- 2x faster on AMD EPYC (CPU-only)
-- 3-6x faster on NVIDIA GPUs (CUDA)
-
 ### Bug Fixes
 - Improved numerical stability for large datasets
 

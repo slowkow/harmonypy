@@ -39,7 +39,7 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Number of harmony iterations: {len(ho.objective_harmony)}")
     print(f"K-means rounds per iteration: {ho.kmeans_rounds}")
     # Z_corr now returns NumPy array directly (backward compatible)
-    print(f"Z_corr shape: {ho.Z_corr.shape} (PCs × cells)")
+    print(f"Z_corr shape: {ho.Z_corr.shape} (cells x PCs)")
     print(f"Z_corr type: {type(ho.Z_corr).__name__}")
 
     # Check convergence
@@ -47,7 +47,7 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Objective (harmony) history: {[f'{x:.2f}' for x in ho.objective_harmony]}")
 
     # Z_corr property returns NumPy array directly (backward compatible)
-    res = pd.DataFrame(ho.Z_corr).T
+    res = pd.DataFrame(ho.Z_corr)
     res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
 
     # Compare to expected results from R

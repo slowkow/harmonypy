@@ -75,7 +75,7 @@ def run_harmony(
     data_mat : np.ndarray
         PCA embedding matrix (cells x PCs or PCs x cells)
     meta_data : pd.DataFrame
-        Metadata with batch variables
+        Metadata with batch variables (cells x variables)
     vars_use : str or list
         Column name(s) in meta_data to use for batch correction
     theta : float or list, optional
@@ -287,23 +287,23 @@ class Harmony:
     
     @property
     def Z_corr(self):
-        """Corrected embedding matrix (d x N). Batch effects removed."""
-        return self._Z_corr.cpu().numpy()
+        """Corrected embedding matrix (N x d). Batch effects removed."""
+        return self._Z_corr.cpu().numpy().T
     
     @property
     def Z_orig(self):
-        """Original embedding matrix (d x N). Input data before correction."""
-        return self._Z_orig.cpu().numpy()
+        """Original embedding matrix (N x d). Input data before correction."""
+        return self._Z_orig.cpu().numpy().T
     
     @property
     def Z_cos(self):
-        """L2-normalized embedding matrix (d x N). Used for clustering."""
-        return self._Z_cos.cpu().numpy()
+        """L2-normalized embedding matrix (N x d). Used for clustering."""
+        return self._Z_cos.cpu().numpy().T
     
     @property
     def R(self):
-        """Soft cluster assignment matrix (K x N). R[k,i] = P(cell i in cluster k)."""
-        return self._R.cpu().numpy()
+        """Soft cluster assignment matrix (N x K). R[i,k] = P(cell i in cluster k)."""
+        return self._R.cpu().numpy().T
     
     @property
     def Y(self):
@@ -322,13 +322,13 @@ class Harmony:
     
     @property
     def Phi(self):
-        """Batch indicator matrix (B x N). One-hot encoding of batch membership."""
-        return self._Phi.cpu().numpy()
+        """Batch indicator matrix (N x B). One-hot encoding of batch membership."""
+        return self._Phi.cpu().numpy().T
     
     @property
     def Phi_moe(self):
-        """Batch indicator with intercept ((B+1) x N). First row is all ones."""
-        return self._Phi_moe.cpu().numpy()
+        """Batch indicator with intercept (N x (B+1)). First column is all ones."""
+        return self._Phi_moe.cpu().numpy().T
     
     @property
     def Pr_b(self):
@@ -352,7 +352,7 @@ class Harmony:
 
     def result(self):
         """Return corrected data as NumPy array."""
-        return self._Z_corr.cpu().numpy()
+        return self._Z_corr.cpu().numpy().T
 
     def allocate_buffers(self):
         self._scale_dist = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)

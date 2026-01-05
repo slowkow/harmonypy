@@ -17,7 +17,7 @@ Example
 -------
 
 <p align="center">
-  <img src="https://i.imgur.com/lqReopf.gif">
+  <img src="https://github.com/user-attachments/assets/2cc25f1b-ae25-4ecc-84af-d96f913dd2ef">
 </p>
 
 This animation shows the Harmony alignment of three single-cell RNA-seq datasets from different donors. Before Harmony, we can see that cells are separated by donor — this is likely a technical batch effect that we would like to remove before we proceed with clustering analysis. After Harmony, we can see that the cells from different donors are well-mixed while preserving the general shape of the data.

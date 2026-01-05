@@ -1,18 +1,17 @@
 harmonypy
 =========
 
-[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi] [![tests][gb]][yml]  [![DOI](https://zenodo.org/badge/229105533.svg)](https://zenodo.org/badge/latestdoi/229105533)
+[![Latest PyPI Version][badge-pypi]][pypi] [![PyPI Downloads][badge-downloads]][pypi] [![DOI][badge-zenodo]][zenodo]
 
-[gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
-[yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
-[pb]: https://img.shields.io/pypi/v/harmonypy.svg
+[badge-pypi]: https://img.shields.io/pypi/v/harmonypy.svg
 [pypi]: https://pypi.org/project/harmonypy/
+[badge-downloads]: https://img.shields.io/pypi/dm/harmonypy?label=pypi%20downloads
+[badge-zenodo]: https://zenodo.org/badge/229105533.svg
+[zenodo]: https://zenodo.org/badge/latestdoi/229105533
 
-[db]: https://img.shields.io/pypi/dm/harmonypy?label=pypi%20downloads
+[Harmony] is an algorithm for integrating multiple high-dimensional datasets.
 
-Harmony is an algorithm for integrating multiple high-dimensional datasets.
-
-harmonypy is a PyTorch-accelerated Python implementation of the [harmony] R package by [Ilya Korsunsky]. It supports GPU acceleration (CUDA, Apple Silicon MPS) and optimized CPU execution.
+harmonypy is a PyTorch-accelerated Python implementation that is derived from the [harmony] R package by [Ilya Korsunsky]. It supports GPU acceleration (CUDA, Apple Silicon MPS) and optimized CPU execution.
 
 Example
 -------
@@ -49,7 +48,7 @@ harmonypy v0.1.0 uses PyTorch for significant performance improvements over the 
 | Medium  | 69k   | 56.22s         | 9.33s            | 6x      |
 | Large   | 858k  | 340s           | 23s (MPS)        | 14x     |
 
-*Benchmarks on Apple M3 Max. GPU acceleration provides the largest speedups for medium to large datasets.*
+*Benchmarks on Apple M1 Max. GPU acceleration provides the largest speedups for medium to large datasets.*
 
 Usage
 -----
@@ -62,12 +61,12 @@ import numpy as np
 import harmonypy as hm
 
 # Load data
-meta_data = pd.read_csv("data/meta.tsv.gz", sep="\t")
-data_mat = pd.read_csv("data/pcs.tsv.gz", sep="\t")
-data_mat = np.array(data_mat)
+meta = pd.read_csv("data/meta.tsv.gz", sep="\t")
+pcs = pd.read_csv("data/pcs.tsv.gz", sep="\t")
+pcs = np.array(pcs)
 
 # Run Harmony
-ho = hm.run_harmony(data_mat, meta_data, ['dataset'])
+ho = hm.run_harmony(pcs, meta, ['dataset'])
 
 # Get corrected PCs as NumPy array
 corrected_pcs = ho.Z_corr.T  # Transpose to cells x PCs
@@ -76,6 +75,27 @@ corrected_pcs = ho.Z_corr.T  # Transpose to cells x PCs
 res = pd.DataFrame(corrected_pcs)
 res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
 res.to_csv("data/adj.tsv.gz", sep="\t", index=False)
+```
+
+It is possible to access all of the internal arrays after running Harmony if you want to inspect the results more closely (see the [Supplement](https://static-content.springer.com/esm/art%3A10.1038%2Fs41592-019-0619-0/MediaObjects/41592_2019_619_MOESM1_ESM.pdf) for more information):
+
+```python
+ho = hm.run_harmony(data_mat, meta_data, ['batch'])
+
+# All properties return NumPy arrays with descriptive docstrings:
+ho.Z_corr    # Corrected embedding (d x N) - batch effects removed
+ho.Z_orig    # Original embedding (d x N) - input data
+ho.Z_cos     # L2-normalized embedding (d x N) - used for clustering
+ho.R         # Soft cluster assignments (K x N) - P(cell i in cluster k)
+ho.Y         # Cluster centroids (d x K) - cluster centers
+ho.O         # Observed batch-cluster counts (K x B)
+ho.E         # Expected batch-cluster counts (K x B)
+ho.Phi       # Batch indicator matrix (B x N) - one-hot encoding
+ho.Phi_moe   # Batch indicator with intercept ((B+1) x N)
+ho.Pr_b      # Batch proportions (B,)
+ho.theta     # Diversity penalty parameters (B,)
+ho.sigma     # Clustering bandwidth (K,)
+ho.lamb      # Ridge regression penalty ((B+1),)
 ```
 
 GPU Acceleration
@@ -103,12 +123,21 @@ ho = hm.run_harmony(data_mat, meta_data, ['batch'], device='mps')
 R Package Compatibility
 -----------------------
 
-As of v0.1.0, harmonypy implements the same algorithm formulas as the latest [harmony] R package, ensuring consistent results between Python and R implementations. Key updates include:
+As of v0.1.0, harmonypy implements the same algorithm formulas as the latest [harmony] R package (v1.2.4), ensuring consistent results between Python and R implementations. Key updates include:
 
 - Updated clustering objective function
 - Dynamic lambda estimation (`lamb=-1`)
 - Improved numerical stability
 
+[Harmony]: https://www.nature.com/articles/s41592-019-0619-0
 [harmony]: https://github.com/immunogenomics/harmony
 [Ilya Korsunsky]: https://github.com/ilyakorsunsky
 [pip]: https://pip.readthedocs.io/
+
+Citation
+--------
+
+If you use harmonypy in your work, please cite the original manuscript describing the algorithm:
+
+- Korsunsky I, Millard N, Fan J, Slowikowski K, Zhang F, Wei K, et al. **Fast, sensitive and accurate integration of single-cell data with Harmony.** *Nat Methods.* 2019. doi:[10.1038/s41592-019-0619-0](https://doi.org/10.1038/s41592-019-0619-0)
+ 

@@ -37,19 +37,6 @@ pip install harmonypy
 
 This will also install PyTorch if not already present. For GPU support, ensure you have the appropriate PyTorch version installed for your system (see [PyTorch installation guide](https://pytorch.org/get-started/locally/)).
 
-Performance
------------
-
-harmonypy v0.1.0 uses PyTorch for significant performance improvements over the previous NumPy implementation:
-
-| Dataset | Cells | NumPy (v0.0.x) | PyTorch (v0.1.0) | Speedup |
-|---------|-------|----------------|------------------|---------|
-| Small   | 3.5k  | 1.88s          | 3.66s            | -       |
-| Medium  | 69k   | 56.22s         | 9.33s            | 6x      |
-| Large   | 858k  | 340s           | 23s (MPS)        | 14x     |
-
-*Benchmarks on Apple M1 Max. GPU acceleration provides the largest speedups for medium to large datasets.*
-
 Usage
 -----
 

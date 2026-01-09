@@ -134,23 +134,17 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
 
 
 def download_data():
-    import wget
     if not os.path.exists("data"):
         os.makedirs("data")
     remote_url = "https://immunogenomics.io/downloads"
     files = [
-        "pbmc_3500_meta.tsv.gz",
-        "pbmc_3500_pcs.tsv.gz",
-        "pbmc_3500_pcs_harmonized.tsv.gz",
-        "ircolitis_blood_cd8_obs.tsv.gz",
-        "ircolitis_blood_cd8_pcs.tsv.gz",
-        "ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
         "acute_myeloid_obs.tsv.gz",
         "acute_myeloid_pcs.tsv.gz",
         "acute_myeloid_pcs_harmonized.tsv.gz",
     ]
     for file in files:
         if not os.path.exists(f"data/{file}"):
+            import wget
             print(f"Downloading {file}")
             wget.download(f"{remote_url}/{file}", f"data/{file}")
 

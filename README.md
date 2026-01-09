@@ -10,7 +10,7 @@
 [zb]: https://img.shields.io/badge/DOI-10.5281/zenodo.4531400-blue
 [zen]: https://doi.org/10.5281/zenodo.4531400
 
-**harmonypy** is a PyTorch-accelerated Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
+**harmonypy** is a Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
 
 <p align="center">
   <img src="https://i.imgur.com/lqReopf.gif">
@@ -49,9 +49,9 @@ result.to_csv("pbmc_3500_pcs_harmony.tsv", sep="\t", index=False)
 Apple M1 Ultra (2022) with PyTorch MPS backend:
 
 ```
-  Small (3.5k cells x 30 PCs):    3.56s
-  Medium (69k cells x 50 PCs):    TBD
-  Large (858k cells x 29 PCs):    TBD
+  Small (3.5k cells x 30 PCs):    3.48s
+  Medium (69k cells x 50 PCs):    9.26s
+  Large (858k cells x 29 PCs):    21.75s
 ```
 
 Note: For small datasets, the NumPy-only version (v0.1.0) may be faster due to GPU overhead.

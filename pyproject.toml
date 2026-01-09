@@ -40,7 +40,10 @@ path = "harmonypy/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/harmonypy",
+    "harmonypy/",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
 ]
 
 [tool.hatch.envs.test]

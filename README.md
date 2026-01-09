@@ -1,96 +1,67 @@
-harmonypy
-=========
+# harmonypy
 
-[![Latest PyPI Version][pb]][pypi] [![PyPI Downloads][db]][pypi] [![tests][gb]][yml]  [![DOI](https://zenodo.org/badge/229105533.svg)](https://zenodo.org/badge/latestdoi/229105533)
+[![PyPI][pb]][pypi] [![Downloads][db]][pypi] [![Tests][gb]][yml] [![DOI][zb]][zen]
 
-[gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
-[yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
 [pb]: https://img.shields.io/pypi/v/harmonypy.svg
 [pypi]: https://pypi.org/project/harmonypy/
+[db]: https://img.shields.io/pypi/dm/harmonypy?label=downloads
+[gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
+[yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
+[zb]: https://github.com/user-attachments/assets/c0b8cec9-77a6-4142-9904-b2bf8714416b
+[zen]: https://zenodo.org/badge/latestdoi/229105533
 
-[db]: https://img.shields.io/pypi/dm/harmonypy?label=pypi%20downloads
-
-Harmony is an algorithm for integrating multiple high-dimensional datasets.
-
-harmonypy is a port of the [harmony] R package by [Ilya Korsunsky].
-
-Example
--------
+**harmonypy** is a Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
 
 <p align="center">
   <img src="https://i.imgur.com/lqReopf.gif">
 </p>
 
-This animation shows the Harmony alignment of three single-cell RNA-seq datasets from different donors.
+This animation shows Harmony aligning three single-cell RNA-seq datasets from different donors. [→ How to make this animation](https://slowkow.com/notes/harmony-animation/). Before Harmony, you can clearly distinguish cells from each of the three donors. After Harmony, the cells from different donors are mixed while preserving the overall shape of the data. This makes it easier to run clustering algorithms to find similar cell types that are present in different batches of data.
 
-[→ How to make this animation.](https://slowkow.com/notes/harmony-animation/)
 
-Installation
-------------
-
-This package has been tested with Python 3.7.
-
-Use [pip] to install:
+## Installation
 
 ```bash
 pip install harmonypy
 ```
 
-Usage
------
 
-Here is a brief example using the data that comes with the R package:
+## Quick Start
 
 ```python
-# Load data
+import harmonypy as hm
 import pandas as pd
 
-meta_data = pd.read_csv("data/meta.tsv.gz", sep = "\t")
-vars_use = ['dataset']
+# Load the principal components and metadata
+pcs = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
+meta = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
 
-# meta_data
-#
-#                  cell_id dataset  nGene  percent_mito cell_type
-# 0    half_TGAAATTGGTCTAG    half   3664      0.017722    jurkat
-# 1    half_GCGATATGCTGATG    half   3858      0.029228      t293
-# 2    half_ATTTCTCTCACTAG    half   4049      0.015966    jurkat
-# 3    half_CGTAACGACGAGAG    half   3443      0.020379    jurkat
-# 4    half_ACGCCTTGTTTACC    half   2813      0.024774      t293
-# ..                   ...     ...    ...           ...       ...
-# 295  t293_TTACGTACGACACT    t293   4152      0.033997      t293
-# 296  t293_TAGAATTGTTGGTG    t293   3097      0.021769      t293
-# 297  t293_CGGATAACACCACA    t293   3157      0.020411      t293
-# 298  t293_GGTACTGAGTCGAT    t293   2685      0.027846      t293
-# 299  t293_ACGCTGCTTCTTAC    t293   3513      0.021240      t293
+# Run Harmony to correct for batch effects (donor)
+harmony_out = hm.run_harmony(pcs, meta, "donor")
 
-data_mat = pd.read_csv("data/pcs.tsv.gz", sep = "\t")
-data_mat = np.array(data_mat)
-
-# data_mat[:5,:5]
-#
-# array([[ 0.0071695 , -0.00552724, -0.0036281 , -0.00798025,  0.00028931],
-#        [-0.011333  ,  0.00022233, -0.00073589, -0.00192452,  0.0032624 ],
-#        [ 0.0091214 , -0.00940727, -0.00106816, -0.0042749 , -0.00029096],
-#        [ 0.00866286, -0.00514987, -0.0008989 , -0.00821785, -0.00126997],
-#        [-0.00953977,  0.00222714, -0.00374373, -0.00028554,  0.00063737]])
-
-# meta_data.shape # 300 cells, 5 variables
-# (300, 5)
-#
-# data_mat.shape  # 300 cells, 20 PCs
-# (300, 20)
-
-# Run Harmony
-import harmonypy as hm
-ho = hm.run_harmony(data_mat, meta_data, vars_use)
-
-# Write the adjusted PCs to a new file.
-res = pd.DataFrame(ho.Z_corr)
-res.columns = ['X{}'.format(i + 1) for i in range(res.shape[1])]
-res.to_csv("data/adj.tsv.gz", sep = "\t", index = False)
+# Save corrected PCs (same shape as input)
+result = pd.DataFrame(harmony_out.Z_corr, columns=pcs.columns)
+result.to_csv("pbmc_3500_pcs_harmony.tsv", sep="\t", index=False)
 ```
 
-[harmony]: https://github.com/immunogenomics/harmony
-[Ilya Korsunsky]: https://github.com/ilyakorsunsky
-[pip]: https://pip.readthedocs.io/
+## Performance
 
+Apple M1 Ultra (2022):
+
+```
+  Small (3.5k cells x 30 PCs):    1.83s
+  Medium (69k cells x 50 PCs):    55.87s
+  Large (858k cells x 29 PCs):    340.00s
+```
+
+
+## Citation
+
+If you use Harmony in your work, please cite the original paper:
+
+> Korsunsky, I., Millard, N., Fan, J. et al. **Fast, sensitive and accurate integration of single-cell data with Harmony.** *Nat Methods* 16, 1289–1296 (2019). https://doi.org/10.1038/s41592-019-0619-0
+
+The [Supplementary Information PDF][supp] provides detailed mathematical descriptions and implementation notes.
+
+[Harmony]: https://github.com/immunogenomics/harmony
+[supp]: https://static-content.springer.com/esm/art%3A10.1038%2Fs41592-019-0619-0/MediaObjects/41592_2019_619_MOESM1_ESM.pdf

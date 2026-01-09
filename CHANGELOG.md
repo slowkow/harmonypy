@@ -1,3 +1,12 @@
+# 0.1.0 - 2025-01-08
+
+- Pure NumPy implementation matching R package v1.2.4 formulas for improved accuracy.
+- Correlation with R harmony results: >0.95 for all PCs.
+- Performance benchmarks:
+  - Small (3.5k cells): 1.88s
+  - Medium (69k cells): 56.22s
+  - Large (858k cells): 340.32s
+
 # 0.0.10 - 2024-07-04
 
 - Migrate to hatch to ease development and include multiple authors.

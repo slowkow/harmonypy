@@ -133,3 +133,5 @@ dmypy.json
 *.swp
 
 .DS_Store
+
+uv.lock

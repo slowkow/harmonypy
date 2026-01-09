@@ -10,7 +10,7 @@
 [zb]: https://img.shields.io/badge/DOI-10.5281/zenodo.4531400-blue
 [zen]: https://doi.org/10.5281/zenodo.4531400
 
-**harmonypy** is a Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
+**harmonypy** is a PyTorch-accelerated Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
 
 <p align="center">
   <img src="https://i.imgur.com/lqReopf.gif">

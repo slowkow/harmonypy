@@ -46,13 +46,15 @@ result.to_csv("pbmc_3500_pcs_harmony.tsv", sep="\t", index=False)
 
 ## Performance
 
-Apple M1 Ultra (2022):
+Apple M1 Ultra (2022) with PyTorch MPS backend:
 
 ```
-  Small (3.5k cells x 30 PCs):    1.83s
-  Medium (69k cells x 50 PCs):    55.87s
-  Large (858k cells x 29 PCs):    340.00s
+  Small (3.5k cells x 30 PCs):    3.56s
+  Medium (69k cells x 50 PCs):    TBD
+  Large (858k cells x 29 PCs):    TBD
 ```
+
+Note: For small datasets, the NumPy-only version (v0.1.0) may be faster due to GPU overhead.
 
 
 ## Citation

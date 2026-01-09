@@ -29,9 +29,6 @@ dependencies = [
     "scipy",
 ]
 
-[project.optional-dependencies]
-jax = ["jax", "jaxlib"]
-
 [project.urls]
 Homepage = "https://github.com/slowkow/harmonypy"
 

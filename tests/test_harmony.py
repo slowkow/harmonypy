@@ -1,17 +1,78 @@
 # Test harmonypy with NumPy implementation
+"""
+Run just the small test (good for Github actions):
+
+    uv run pytest
+
+The small test data is available on Github.
+
+Or run all of the tests (good for local development):
+
+    uv run tests/test_harmony.py
+
+The medium and large data will be downloaded automatically.
+"""
 from time import time
 
 import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
-
+import os
 import harmonypy as hm
 
 
-def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
+def test_run_harmony_small():
+    run_harmony(
+        meta_tsv="data/pbmc_3500_meta.tsv.gz",
+        pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
+        harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
+        batch_var="donor"
+    )
+
+
+def test_random_seed():
+    print("\n" + "=" * 60)
+    print("TEST: test_random_seed")
+    print("=" * 60)
+
+    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
+    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
+
+    def run(random_state):
+        ho = hm.run_harmony(data_mat,
+                            meta_data, ['donor'],
+                            max_iter_harmony=2,
+                            max_iter_kmeans=2,
+                            verbose=False,
+                            random_state=random_state)
+        return ho.Z_corr
+
+    # Assert same results when random_state is set.
+    print("\n--- Testing reproducibility with random_state=42 ---")
+    result1 = run(42)
+    result2 = run(42)
+    diff_same_seed = np.abs(result1 - result2).sum()
+    print(f"Difference between two runs with same seed: {diff_same_seed:.6f}")
+    np.testing.assert_allclose(result1, result2)
+    print("✓ Same seed produces identical results (PASSED)")
+
+    # Assert different values when random_state is different
+    print("\n--- Testing variability with different seeds ---")
+    result3 = run(123)
+    result4 = run(456)
+    diff_diff_seed = np.abs(result3 - result4).sum()
+    print(f"Difference between runs with different seeds: {diff_diff_seed:.2f}")
+    assert diff_diff_seed > 1000, f"Expected diff > 1000, got {diff_diff_seed}"
+    print("✓ Different seeds produce different results (PASSED)")
+
+
+def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n" + "=" * 60)
     print("TEST: test_run_harmony (NumPy)")
     print("=" * 60)
+
+    if not os.path.exists(meta_tsv):
+        return 0
 
     # Load input data
     meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
@@ -71,40 +132,26 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     return end - start
 
 
-def test_random_seed():
-    print("\n" + "=" * 60)
-    print("TEST: test_random_seed")
-    print("=" * 60)
-
-    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
-    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
-
-    def run(random_state):
-        ho = hm.run_harmony(data_mat,
-                            meta_data, ['donor'],
-                            max_iter_harmony=2,
-                            max_iter_kmeans=2,
-                            verbose=False,
-                            random_state=random_state)
-        return ho.Z_corr
-
-    # Assert same results when random_state is set.
-    print("\n--- Testing reproducibility with random_state=42 ---")
-    result1 = run(42)
-    result2 = run(42)
-    diff_same_seed = np.abs(result1 - result2).sum()
-    print(f"Difference between two runs with same seed: {diff_same_seed:.6f}")
-    np.testing.assert_allclose(result1, result2)
-    print("✓ Same seed produces identical results (PASSED)")
-
-    # Assert different values when random_state is different
-    print("\n--- Testing variability with different seeds ---")
-    result3 = run(123)
-    result4 = run(456)
-    diff_diff_seed = np.abs(result3 - result4).sum()
-    print(f"Difference between runs with different seeds: {diff_diff_seed:.2f}")
-    assert diff_diff_seed > 1000, f"Expected diff > 1000, got {diff_diff_seed}"
-    print("✓ Different seeds produce different results (PASSED)")
+def download_data():
+    import wget
+    if not os.path.exists("data"):
+        os.makedirs("data")
+    remote_url = "https://immunogenomics.io/downloads"
+    files = [
+        "pbmc_3500_meta.tsv.gz",
+        "pbmc_3500_pcs.tsv.gz",
+        "pbmc_3500_pcs_harmonized.tsv.gz",
+        "ircolitis_blood_cd8_obs.tsv.gz",
+        "ircolitis_blood_cd8_pcs.tsv.gz",
+        "ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
+        "acute_myeloid_obs.tsv.gz",
+        "acute_myeloid_pcs.tsv.gz",
+        "acute_myeloid_pcs_harmonized.tsv.gz",
+    ]
+    for file in files:
+        if not os.path.exists(f"data/{file}"):
+            print(f"Downloading {file}")
+            wget.download(f"{remote_url}/{file}", f"data/{file}")
 
 
 if __name__ == "__main__":
@@ -113,22 +160,24 @@ if __name__ == "__main__":
     print("#" * 60)
     
     timings = {}
+
+    download_data()
     
-    timings['small'] = test_run_harmony(
+    timings['small'] = run_harmony(
         meta_tsv="data/pbmc_3500_meta.tsv.gz",
         pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
         harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
         batch_var="donor"
     )
     
-    timings['medium'] = test_run_harmony(
+    timings['medium'] = run_harmony(
         meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
         pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
         harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
         batch_var="batch"
     )
     
-    timings['large'] = test_run_harmony(
+    timings['large'] = run_harmony(
         meta_tsv="data/acute_myeloid_obs.tsv.gz",
         pcs_tsv="data/acute_myeloid_pcs.tsv.gz",
         harmonized_tsv="data/acute_myeloid_pcs_harmonized.tsv.gz",

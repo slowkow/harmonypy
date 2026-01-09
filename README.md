@@ -7,7 +7,7 @@
 [db]: https://img.shields.io/pypi/dm/harmonypy?label=downloads
 [gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
 [yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
-[zb]: https://zenodo.org/badge/229105533.svg
+[zb]: https://github.com/user-attachments/assets/c0b8cec9-77a6-4142-9904-b2bf8714416b
 [zen]: https://zenodo.org/badge/latestdoi/229105533
 
 **harmonypy** is a Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
@@ -42,6 +42,16 @@ harmony_out = hm.run_harmony(pcs, meta, "donor")
 # Save corrected PCs (same shape as input)
 result = pd.DataFrame(harmony_out.Z_corr, columns=pcs.columns)
 result.to_csv("pbmc_3500_pcs_harmony.tsv", sep="\t", index=False)
+```
+
+## Performance
+
+Apple M1 Ultra (2022):
+
+```
+  Small (3.5k cells x 30 PCs):    1.83s
+  Medium (69k cells x 50 PCs):    55.87s
+  Large (858k cells x 29 PCs):    340.00s
 ```
 
 

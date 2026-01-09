@@ -7,8 +7,8 @@
 [db]: https://img.shields.io/pypi/dm/harmonypy?label=downloads
 [gb]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml/badge.svg
 [yml]: https://github.com/slowkow/harmonypy/actions/workflows/python-package.yml
-[zb]: https://github.com/user-attachments/assets/c0b8cec9-77a6-4142-9904-b2bf8714416b
-[zen]: https://zenodo.org/badge/latestdoi/229105533
+[zb]: https://img.shields.io/badge/DOI-10.5281/zenodo.4531400-blue
+[zen]: https://doi.org/10.5281/zenodo.4531400
 
 **harmonypy** is a Python implementation of the [Harmony] algorithm for integrating multiple high-dimensional datasets.
 

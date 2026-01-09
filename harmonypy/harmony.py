@@ -94,7 +94,7 @@ def run_harmony(
     Returns
     -------
     Harmony
-        Harmony object with corrected data in Z_corr attribute.
+        Harmony object with corrected data in Z_corr attribute (cells × PCs).
     """
     N = meta_data.shape[0]
     if data_mat.shape[1] != N:
@@ -195,6 +195,29 @@ class Harmony:
     """Harmony class for batch effect correction.
     
     Updated to match R package implementation for improved performance.
+    
+    Attributes
+    ----------
+    Z_corr : np.ndarray
+        Batch-corrected embedding matrix (cells × PCs). This is the main output.
+    Z_orig : np.ndarray
+        Original embedding matrix (cells × PCs).
+    Z_cos : np.ndarray
+        L2-normalized embedding (cells × PCs), used for soft clustering.
+    R : np.ndarray
+        Soft cluster assignment matrix (cells × clusters). R[i,k] is the 
+        probability that cell i belongs to cluster k.
+    Y : np.ndarray
+        Cluster centroid matrix (PCs × clusters).
+    O : np.ndarray
+        Observed counts matrix (clusters × batches). O[k,b] is the sum of 
+        cluster k assignment probabilities for cells in batch b.
+    E : np.ndarray
+        Expected counts matrix (clusters × batches). E[k,b] is the expected 
+        count if cells were distributed proportionally across batches.
+    Phi : np.ndarray
+        Batch indicator matrix (cells × batches). Phi[i,b] = 1 if cell i 
+        belongs to batch b.
     """
     
     def __init__(
@@ -203,22 +226,25 @@ class Harmony:
             epsilon_kmeans, epsilon_harmony, K, block_size, verbose,
             random_state=None
     ):
-        self.Z_corr = np.array(Z, dtype=np.float64)
+        # Store original data as PCs × cells (internal representation)
         self.Z_orig = np.array(Z, dtype=np.float64)
+        self.Z_corr = np.array(Z, dtype=np.float64)
 
-        # Simple L2 normalization (matches R package)
+        # L2 normalization for cosine distance clustering (matches R package)
         self.Z_cos = self.Z_orig / np.linalg.norm(self.Z_orig, ord=2, axis=0)
 
-        # Store Phi as sparse CSC for efficiency
+        # Batch indicator matrix: Phi[b,i] = 1 if cell i is in batch b
         self.Phi = sp.csc_matrix(Phi)
-        self.Phi_dense = Phi  # Keep dense version for small operations
+        self.Phi_dense = Phi  # Dense version for matrix operations
+        
+        # Pr_b[b] = proportion of cells in batch b
         self.Pr_b = Pr_b
         
-        self.N = self.Z_corr.shape[1]
-        self.B = Phi.shape[0]
-        self.d = self.Z_corr.shape[0]
+        self.N = self.Z_corr.shape[1]  # Number of cells
+        self.B = Phi.shape[0]           # Number of batches
+        self.d = self.Z_corr.shape[0]   # Number of PCs
         
-        # Build batch index for fast ridge correction (matches R package)
+        # Pre-compute cell indices for each batch (speeds up ridge correction)
         self.batch_index = []
         for b in range(self.B):
             self.batch_index.append(np.where(Phi[b, :] > 0)[0])
@@ -256,13 +282,14 @@ class Harmony:
         return self.Z_corr
 
     def allocate_buffers(self):
-        self._scale_dist = np.zeros((self.K, self.N), dtype=np.float64)
-        self.dist_mat = np.zeros((self.K, self.N), dtype=np.float64)
-        self.O = np.zeros((self.K, self.B), dtype=np.float64)
-        self.E = np.zeros((self.K, self.B), dtype=np.float64)
-        self.W = np.zeros((self.B + 1, self.d), dtype=np.float64)
-        self.R = np.zeros((self.K, self.N), dtype=np.float64)
-        self.Y = np.zeros((self.d, self.K), dtype=np.float64)
+        """Allocate memory for intermediate matrices."""
+        self._scale_dist = np.zeros((self.K, self.N), dtype=np.float64)  # Scaled distances
+        self.dist_mat = np.zeros((self.K, self.N), dtype=np.float64)     # Distance to centroids
+        self.O = np.zeros((self.K, self.B), dtype=np.float64)  # Observed batch counts per cluster
+        self.E = np.zeros((self.K, self.B), dtype=np.float64)  # Expected batch counts per cluster
+        self.W = np.zeros((self.B + 1, self.d), dtype=np.float64)  # Ridge regression coefficients
+        self.R = np.zeros((self.K, self.N), dtype=np.float64)  # Soft cluster assignments
+        self.Y = np.zeros((self.d, self.K), dtype=np.float64)  # Cluster centroids
 
     def init_cluster(self, random_state):
         logger.info("Computing initial centroids with sklearn.KMeans...")
@@ -333,6 +360,14 @@ class Harmony:
                 
         if verbose and not converged:
             logger.info("Stopped before convergence")
+        
+        # Transpose matrices so cells are always the first dimension
+        # This makes the output more intuitive: Z_corr[i, :] is cell i's corrected PCs
+        self.Z_corr = self.Z_corr.T   # PCs × cells → cells × PCs
+        self.Z_orig = self.Z_orig.T   # PCs × cells → cells × PCs
+        self.Z_cos = self.Z_cos.T     # PCs × cells → cells × PCs
+        self.R = self.R.T             # clusters × cells → cells × clusters
+        self.Phi = self.Phi_dense.T   # batches × cells → cells × batches
 
     def cluster(self):
         self.dist_mat = 2 * (1 - self.Y.T @ self.Z_cos)

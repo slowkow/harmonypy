@@ -37,14 +37,15 @@ def test_run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Number of clusters (K): {ho.K}")
     print(f"Number of harmony iterations: {len(ho.objective_harmony)}")
     print(f"K-means rounds per iteration: {ho.kmeans_rounds}")
-    print(f"Z_corr shape: {ho.Z_corr.shape} (PCs × cells)")
+    print(f"Z_corr shape: {ho.Z_corr.shape} (cells × PCs)")
     print(f"Z_orig shape: {ho.Z_orig.shape}")
 
     # Check convergence
     print("\n--- Convergence ---")
     print(f"Objective (harmony) history: {[f'{x:.2f}' for x in ho.objective_harmony]}")
 
-    res = pd.DataFrame(ho.Z_corr).T
+    # Z_corr is now cells × PCs (same as input)
+    res = pd.DataFrame(ho.Z_corr)
     res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
 
     # Compare to expected results from R

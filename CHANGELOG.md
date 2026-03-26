@@ -1,3 +1,20 @@
+# 2.0.0 - 2026-03-25
+
+Updated to match the [harmony2](https://github.com/immunogenomics/harmony/tree/harmony2) R package.
+
+- **Breaking:** `lamb` now defaults to automatic lambda estimation (was fixed `1`).
+  Pass `lamb=1` explicitly to restore previous behavior.
+- **Breaking:** Default parameter changes to match R harmony2:
+  `max_iter_kmeans` 20→4, `epsilon_cluster` 1e-5→1e-3, `epsilon_harmony` 1e-4→1e-2.
+- New diversity penalty formula: `(2E+1)/(O+E+1)` replaces `E/(O+E)` for improved
+  numerical stability.
+- Clustering loop restructured: cold-start R re-estimation after correction,
+  centroid updates moved into the ridge regression step.
+- Arrowhead matrix inverse optimization for single-covariate batch correction.
+- New `batch_prop_cutoff` parameter (default 1e-5) excludes underrepresented
+  batches from correction in each cluster.
+- Correlation with R harmony2 output: ≥0.998 across all PCs on test data.
+
 # 0.2.0 - 2025-01-09
 
 - PyTorch backend with GPU acceleration (CUDA, Apple Silicon MPS) and optimized CPU execution.

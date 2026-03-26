@@ -22,10 +22,13 @@ import harmonypy as hm
 
 
 def test_run_harmony_small():
+    harmonized = "data/pbmc_3500_pcs_harmony2.tsv.gz"
+    if not os.path.exists(harmonized):
+        harmonized = "data/pbmc_3500_pcs_harmonized.tsv.gz"
     run_harmony(
         meta_tsv="data/pbmc_3500_meta.tsv.gz",
         pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
-        harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
+        harmonized_tsv=harmonized,
         batch_var="donor"
     )
 

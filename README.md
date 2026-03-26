@@ -77,12 +77,10 @@ sc.tl.leiden(adata)
 Apple M1 Ultra (2022) with PyTorch MPS backend:
 
 ```
-  Small (3.5k cells x 30 PCs):    3.48s
-  Medium (69k cells x 50 PCs):    9.26s
-  Large (858k cells x 29 PCs):    21.75s
+  Small (3.5k cells x 30 PCs):    2.04s
+  Medium (69k cells x 50 PCs):    3.84s
+  Large (858k cells x 29 PCs):    24.89s
 ```
-
-Note: For small datasets, the NumPy-only version (v0.1.0) may be faster due to GPU overhead.
 
 
 ## Citation
@@ -92,6 +90,10 @@ If you use Harmony in your work, please cite the original paper:
 > Korsunsky, I., Millard, N., Fan, J. et al. **Fast, sensitive and accurate integration of single-cell data with Harmony.** *Nat Methods* 16, 1289–1296 (2019). https://doi.org/10.1038/s41592-019-0619-0
 
 The [Supplementary Information PDF][supp] provides detailed mathematical descriptions and implementation notes.
+
+To learn more about Harmony 2, please see the preprint here:
+
+> Patikas, Nikolaos, Hongcheng Yao, Roopa Madhu, Soumya Raychaudhuri, Martin Hemberg, and Ilya Korsunsky. 2026. **Integration of Large, Complex Single-Cell Datasets with Harmony2.** *bioRxiv*. https://doi.org/10.64898/2026.03.16.711825
 
 [Harmony]: https://github.com/immunogenomics/harmony
 [supp]: https://static-content.springer.com/esm/art%3A10.1038%2Fs41592-019-0619-0/MediaObjects/41592_2019_619_MOESM1_ESM.pdf

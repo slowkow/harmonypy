@@ -15,10 +15,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
 import pandas as pd
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
+
+# Prevent OpenMP runtime conflicts on macOS between openblas (via Armadillo)
+# and other libraries. Setting threads to 1 avoids the conflict.
+if "OMP_NUM_THREADS" not in os.environ:
+    os.environ["OMP_NUM_THREADS"] = "1"
+if "OPENBLAS_NUM_THREADS" not in os.environ:
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import logging
 
 # create logger
@@ -52,10 +60,10 @@ def run_harmony(
     vars_use,
     theta=None,
     lamb=None,
-    sigma=0.1, 
+    sigma=0.1,
     nclust=None,
     tau=0,
-    block_size=0.05, 
+    block_size=0.05,
     max_iter_harmony=10,
     max_iter_kmeans=4,
     epsilon_cluster=1e-3,
@@ -64,7 +72,8 @@ def run_harmony(
     batch_prop_cutoff=1e-5,
     verbose=True,
     random_state=0,
-    device=None
+    device=None,
+    backend="auto"
 ):
     """Run Harmony batch effect correction.
     
@@ -204,15 +213,72 @@ def run_harmony(
         logger.info(f"  Data: {data_mat.shape[0]} PCs × {N} cells")
         logger.info(f"  Batch variables: {vars_use}")
 
+    # Ensure data_mat is a proper numpy array
+    if hasattr(data_mat, 'values'):
+        data_mat = data_mat.values
+
+    # Resolve backend
+    use_cpp = False
+    if backend == "auto":
+        try:
+            from harmonypy._harmony_cpp import HarmonyCpp
+            use_cpp = True
+        except ImportError:
+            use_cpp = False
+    elif backend == "cpp":
+        from harmonypy._harmony_cpp import HarmonyCpp
+        use_cpp = True
+
+    if use_cpp:
+        # C++ backend (Armadillo)
+        from harmonypy._harmony_cpp import HarmonyCpp
+
+        if verbose:
+            logger.info("Using C++ backend (Armadillo)")
+
+        # C++ needs dense Phi (B x N) and float64
+        phi = np.zeros((B, N), dtype=np.float64)
+        for c in range(len(vars_use)):
+            for j in range(N):
+                phi[batch_of_cell[c, j], j] = 1.0
+
+        data_f64 = np.ascontiguousarray(data_mat.astype(np.float64))
+        phi_f64 = np.ascontiguousarray(phi)
+
+        # Signal lambda estimation with sentinel [-1]
+        if lambda_estimation:
+            lamb_cpp = np.array([-1.0], dtype=np.float64)
+        else:
+            lamb_cpp = lamb.astype(np.float64)
+
+        cpp_harmony = HarmonyCpp(
+            data_f64,
+            phi_f64,
+            Pr_b.astype(np.float64),
+            sigma.astype(np.float64),
+            theta.astype(np.float64),
+            lamb_cpp,
+            float(alpha),
+            max_iter_harmony,
+            max_iter_kmeans,
+            float(epsilon_cluster),
+            float(epsilon_harmony),
+            nclust,
+            float(block_size),
+            phi_n.tolist(),
+            float(batch_prop_cutoff),
+            verbose,
+            random_state if random_state is not None else 0
+        )
+        return HarmonyCpp_Wrapper(cpp_harmony)
+
+    # PyTorch backend
+    data_mat = np.asarray(data_mat, dtype=np.float32)
+
     # Set random seeds
     np.random.seed(random_state)
     torch.manual_seed(random_state)
 
-    # Ensure data_mat is a proper numpy array
-    if hasattr(data_mat, 'values'):
-        data_mat = data_mat.values
-    data_mat = np.asarray(data_mat, dtype=np.float32)
-    
     ho = Harmony(
         data_mat, batch_of_cell, phi_n, N_b, Pr_b, sigma.astype(np.float32),
         theta, lamb, alpha, lambda_estimation, batch_prop_cutoff,
@@ -222,6 +288,62 @@ def run_harmony(
     )
 
     return ho
+
+
+class HarmonyCpp_Wrapper:
+    """Wrapper around C++ HarmonyCpp to provide the same interface as Harmony."""
+
+    def __init__(self, cpp_harmony):
+        self._cpp = cpp_harmony
+
+    @property
+    def Z_corr(self):
+        """Corrected embedding matrix (N x d)."""
+        return self._cpp.Z_corr.T
+
+    @property
+    def Z_orig(self):
+        """Original embedding matrix (N x d)."""
+        return self._cpp.Z_orig.T
+
+    @property
+    def Z_cos(self):
+        """L2-normalized embedding matrix (N x d)."""
+        return self._cpp.Z_cos.T
+
+    @property
+    def R(self):
+        """Soft cluster assignment matrix (N x K)."""
+        return self._cpp.R.T
+
+    @property
+    def Y(self):
+        """Cluster centroids matrix (d x K)."""
+        return self._cpp.Y
+
+    @property
+    def K(self):
+        """Number of clusters."""
+        return self._cpp.K
+
+    @property
+    def objective_harmony(self):
+        """Harmony objective values per iteration."""
+        return self._cpp.objective_harmony
+
+    @property
+    def objective_kmeans(self):
+        """K-means objective values."""
+        return self._cpp.objective_kmeans
+
+    @property
+    def kmeans_rounds(self):
+        """Number of k-means rounds per harmony iteration."""
+        return self._cpp.kmeans_rounds
+
+    def result(self):
+        """Return corrected data as NumPy array."""
+        return self._cpp.Z_corr.T
 
 
 class Harmony:

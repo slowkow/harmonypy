@@ -3,6 +3,7 @@
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 //
 // harmony2 C++ backend — matches the R harmony2 package algorithm.
+// Uses float precision and minimal memory layout to match R package.
 
 #ifndef HARMONY_HPP
 #define HARMONY_HPP
@@ -16,78 +17,79 @@
 
 namespace harmony {
 
-inline arma::vec find_lambda(double alpha, const arma::vec& cluster_E) {
-    arma::vec lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
+// Match R package: all internal computation uses float
+typedef arma::Mat<float> MATTYPE;
+typedef arma::SpMat<float> SPMAT;
+typedef arma::Col<float> VECTYPE;
+
+inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
+    VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
     lambda_vec.subvec(1, lambda_vec.n_elem - 1) = cluster_E * alpha;
     return lambda_vec;
 }
 
-inline arma::mat harmony_pow(arma::mat A, const arma::vec& T) {
+inline MATTYPE harmony_pow(MATTYPE A, const VECTYPE& T) {
     for (unsigned c = 0; c < A.n_cols; c++) {
         A.col(c) = arma::pow(A.col(c), T(c));
     }
     return A;
 }
 
-arma::mat kmeans_plusplus(const arma::mat& data, int K, std::mt19937& rng);
+MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng);
 
 class Harmony {
 public:
-    // Data matrices (d x N)
-    arma::mat Z_orig;
-    arma::mat Z_corr;
-    arma::mat Z_cos;
+    // Data matrices (d x N) — no separate Z_cos, Z_corr serves both roles
+    MATTYPE Z_orig;
+    MATTYPE Z_corr;  // L2-normalized in-place; also holds corrected data
 
     // Sparse batch indicators
-    arma::sp_mat Phi;        // B x N
-    arma::sp_mat Phi_t;      // N x B
-    arma::sp_mat Phi_moe;    // (B+1) x N
-    arma::sp_mat Phi_moe_t;  // N x (B+1)
+    SPMAT Phi;        // B x N
+    SPMAT Phi_t;      // N x B
+    SPMAT Phi_moe;    // (B+1) x N
+    SPMAT Phi_moe_t;  // N x (B+1)
 
-    arma::vec Pr_b;
-    std::vector<arma::uvec> batch_index;  // cell indices per batch
+    VECTYPE Pr_b;
+    std::vector<arma::uvec> batch_index;
 
-    arma::mat Y;           // d x K centroids
-    arma::mat R;           // K x N soft assignments
-    arma::mat dist_mat;    // K x N distances
+    MATTYPE Y;           // d x K centroids
+    MATTYPE R;           // K x N soft assignments
+    MATTYPE dist_mat;    // K x N distances — no separate _scale_dist
 
-    arma::mat O;           // K x B observed
-    arma::mat E;           // K x B expected
-    arma::mat W;           // (B+1) x d ridge weights
+    MATTYPE O;           // K x B observed
+    MATTYPE E;           // K x B expected
+    MATTYPE W;           // (B+1) x d ridge weights
 
-    arma::vec sigma;       // K
-    arma::vec theta;       // B
-    arma::vec lambda;      // B+1
+    VECTYPE sigma;       // K
+    VECTYPE theta;       // B
+    VECTYPE lambda;      // B+1
 
-    double alpha;
+    float alpha;
     bool lambda_estimation;
 
     int N, d, K, B;
     int max_iter_harmony, max_iter_kmeans;
-    double epsilon_kmeans, epsilon_harmony;
-    double block_size;
+    float epsilon_kmeans, epsilon_harmony;
+    float block_size;
     int window_size;
     bool verbose;
 
-    // Covariate structure (for multi-covariate support)
     std::vector<int> B_vec;
     std::vector<unsigned> covariate_bounds;
-    double batch_proportion_cutoff;
+    float batch_proportion_cutoff;
 
-    // Tracking
-    std::vector<double> objective_harmony;
-    std::vector<double> objective_kmeans;
-    std::vector<double> objective_kmeans_dist;
-    std::vector<double> objective_kmeans_entropy;
-    std::vector<double> objective_kmeans_cross;
+    std::vector<float> objective_harmony;
+    std::vector<float> objective_kmeans;
+    std::vector<float> objective_kmeans_dist;
+    std::vector<float> objective_kmeans_entropy;
+    std::vector<float> objective_kmeans_cross;
     std::vector<int> kmeans_rounds;
 
     std::mt19937 rng;
-    arma::mat _scale_dist;
 
     Harmony(
-        const arma::mat& Z,
-        const arma::sp_mat& Phi,
+        const arma::mat& Z,          // input as double from numpy
+        const arma::sp_mat& Phi,     // input as double from numpy
         const arma::vec& Pr_b,
         const arma::vec& sigma,
         const arma::vec& theta,
@@ -105,7 +107,13 @@ public:
         int random_state
     );
 
-    arma::mat result() const { return Z_corr; }
+    // Return as double for numpy
+    arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }
+    arma::mat get_Z_corr() const { return arma::conv_to<arma::mat>::from(Z_corr); }
+    arma::mat get_Z_orig() const { return arma::conv_to<arma::mat>::from(Z_orig); }
+    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(Z_corr); } // Z_corr IS Z_cos
+    arma::mat get_R() const { return arma::conv_to<arma::mat>::from(R); }
+    arma::mat get_Y() const { return arma::conv_to<arma::mat>::from(Y); }
 
     void init_cluster();
     void harmonize(int iter_harmony, bool verbose);

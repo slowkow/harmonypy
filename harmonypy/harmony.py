@@ -367,7 +367,6 @@ class Harmony:
         self._dist_mat = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
         self._O = torch.zeros((self.K, self.B), dtype=torch.float32, device=self.device)
         self._E = torch.zeros((self.K, self.B), dtype=torch.float32, device=self.device)
-        self._W = torch.zeros((self.B + 1, self.d), dtype=torch.float32, device=self.device)
         self._R = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
         self._Y = torch.zeros((self.d, self.K), dtype=torch.float32, device=self.device)
 
@@ -400,22 +399,24 @@ class Harmony:
         self.objective_harmony.append(self.objective_kmeans[-1])
 
     def compute_objective(self):
-        # Normalization constant
         norm_const = 2000.0 / self.N
-        
-        # K-means error
-        kmeans_error = torch.sum(self._R * self._dist_mat).item()
-        
-        # Entropy
-        _entropy = torch.sum(safe_entropy_torch(self._R) * self._sigma[:, None]).item()
-        
-        # Cross entropy (harmony2 formula)
-        R_sigma = self._R * self._sigma[:, None]
+
+        # K-means error: sum(R * dist_mat) via dot on flat views (no K x N temp)
+        kmeans_error = torch.dot(self._R.reshape(-1), self._dist_mat.reshape(-1)).item()
+
+        # Entropy: sum(xlogy(R, R) * sigma)
+        # = sum_k sigma_k * sum_j R[k,j]*log(R[k,j])
+        # Compute per-row sums of xlogy then dot with sigma (no K x N sigma broadcast)
+        entropy_per_k = torch.xlogy(self._R, self._R).sum(dim=1)
+        _entropy = torch.dot(entropy_per_k, self._sigma).item()
+
+        # Cross entropy: sum((R * sigma) * (theta_log @ Phi))
+        # Since R @ Phi.T = O, we have (R * sigma) @ Phi.T = sigma[:,None] * O
+        # This reduces the K x N matmul to a K x B element-wise product
         ratio = (self._O + self._E + 1) / (2 * self._E + 1)
         theta_log = self._theta.unsqueeze(0).expand(self.K, -1) * torch.log(ratio)
-        _cross_entropy = torch.sum(R_sigma * (theta_log @ self._Phi)).item()
-        
-        # Store with normalization constant
+        _cross_entropy = torch.sum(self._sigma[:, None] * self._O * theta_log).item()
+
         self.objective_kmeans.append((kmeans_error + _entropy + _cross_entropy) * norm_const)
         self.objective_kmeans_dist.append(kmeans_error * norm_const)
         self.objective_kmeans_entropy.append(_entropy * norm_const)
@@ -443,11 +444,13 @@ class Harmony:
         # Cold-start R re-estimation after correction (harmony2)
         # On iterations after the first, R is stale because Z_corr changed
         if len(self.objective_harmony) > 1:
-            self._Z_cos = self._Z_corr / torch.linalg.norm(self._Z_corr, ord=2, dim=0)
-            self._dist_mat = 2 * (1 - self._Y.T @ self._Z_cos)
-            self._R = -self._dist_mat / self._sigma[:, None]
-            self._R = torch.exp(self._R)
-            self._R = self._R / self._R.sum(dim=0)
+            torch.div(self._Z_corr, torch.linalg.norm(self._Z_corr, ord=2, dim=0), out=self._Z_cos)
+            torch.mm(self._Y.T, self._Z_cos, out=self._dist_mat)
+            self._dist_mat.mul_(-2).add_(2)  # dist = 2*(1 - Y.T @ Z_cos)
+            # Compute R in-place from dist_mat
+            torch.div(self._dist_mat, self._sigma[:, None], out=self._R)
+            self._R.neg_().exp_()
+            self._R /= self._R.sum(dim=0)
             self._E = torch.outer(self._R.sum(dim=1), self._Pr_b)
             self._O = self._R @ self._Phi.T
 
@@ -667,19 +670,9 @@ class Harmony:
         self._Z_cos = self._Z_corr / torch.linalg.norm(self._Z_corr, ord=2, dim=0)
 
 
-def safe_entropy_torch(x):
-    """Compute x * log(x), returning 0 where x is 0 or negative."""
-    result = x * torch.log(x)
-    result = torch.where(torch.isfinite(result), result, torch.zeros_like(result))
-    return result
-
-
 def harmony_pow_torch(A, T):
     """Element-wise power with different exponents per column."""
-    result = torch.empty_like(A)
-    for c in range(A.shape[1]):
-        result[:, c] = torch.pow(A[:, c], T[c])
-    return result
+    return torch.pow(A, T.unsqueeze(0))
 
 
 def find_lambda_torch(alpha, cluster_E, device):

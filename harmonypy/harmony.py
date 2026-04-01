@@ -578,8 +578,14 @@ class Harmony:
                 else:
                     lamb_vec = self._lamb
 
-                Phi_Rk = self._Phi_moe * self._R[k, :]
-                cov_mat = Phi_Rk @ self._Phi_moe.T + torch.diag(lamb_vec)
+                # Build cov_mat directly from O[k,:] -- no (B+1) x N Phi_Rk needed
+                Ok = self._O[k, :]
+                cov_mat = torch.zeros(self.B + 1, self.B + 1, dtype=torch.float32, device=self.device)
+                cov_mat[0, 0] = Ok.sum()
+                cov_mat[0, 1:] = Ok
+                cov_mat[1:, 0] = Ok
+                cov_mat[1:, 1:] = torch.diag(Ok)
+                cov_mat += torch.diag(lamb_vec)
 
                 # Arrowhead optimization for single covariate
                 if len(self.B_vec) > 1:
@@ -587,37 +593,29 @@ class Harmony:
                 else:
                     inv_cov = _arrowhead_inv(cov_mat)
 
-                Z_tmp = self._Z_orig * self._R[k, :]
-
-                W = inv_cov[:, 0:1] @ Z_tmp.sum(dim=1, keepdim=True).T
+                # Compute W via per-batch matrix-vector products -- no d x N Z_tmp
+                Rk = self._R[k, :]
+                z_sums = []
                 for b in range(self.B):
-                    batch_sum = Z_tmp[:, self._batch_index[b]].sum(dim=1, keepdim=True)
-                    W = W + inv_cov[:, b+1:b+2] @ batch_sum.T
+                    idx = self._batch_index[b]
+                    z_sums.append(self._Z_orig[:, idx] @ Rk[idx])
+
+                z_sum_all = sum(z_sums)
+                W = inv_cov[:, 0:1] @ z_sum_all.unsqueeze(0)
+                for b in range(self.B):
+                    W = W + inv_cov[:, b+1:b+2] @ z_sums[b].unsqueeze(0)
 
                 # Update centroid from intercept, then zero it out
                 self._Y[:, k] = W[0, :]
                 W[0, :] = 0
-                self._Z_corr = self._Z_corr - W.T @ Phi_Rk
+
+                # Batch-wise in-place correction -- no d x N product
+                for b in range(self.B):
+                    idx = self._batch_index[b]
+                    self._Z_corr[:, idx] -= W[b+1:b+2, :].T @ self._R[k:k+1, idx]
             else:
-                # Subset to qualifying batches and their cells
-                keep_cells_list = [self._batch_index[b] for b in keep]
-                keep_cells_set = torch.unique(torch.cat(keep_cells_list))
-
-                # Build subsetted design matrix
+                # Subset to qualifying batches
                 n_keep = len(keep)
-                n_cells = keep_cells_set.shape[0]
-
-                # Subsetted Phi_moe: (n_keep+1) x n_cells
-                sub_Phi = torch.zeros(n_keep, n_cells, dtype=torch.float32, device=self.device)
-                sub_batch_index = []
-                for i, b in enumerate(keep):
-                    # Map original cell indices to subsetted indices
-                    mask = torch.isin(keep_cells_set, self._batch_index[b])
-                    sub_Phi[i, mask] = 1.0
-                    sub_batch_index.append(torch.where(mask)[0])
-
-                ones_sub = torch.ones(1, n_cells, dtype=torch.float32, device=self.device)
-                sub_Phi_moe = torch.cat([ones_sub, sub_Phi], dim=0)
 
                 # Lambda for subsetted batches
                 if self.lambda_estimation:
@@ -627,28 +625,40 @@ class Harmony:
                     keep_lamb_idx = [0] + [b + 1 for b in keep]
                     lamb_vec = self._lamb[keep_lamb_idx]
 
-                # R for this cluster, subsetted to qualifying cells
-                Rk_sub = self._R[k, keep_cells_set]
-                sub_Phi_Rk = sub_Phi_moe * Rk_sub
-
-                cov_mat = sub_Phi_Rk @ sub_Phi_moe.T + torch.diag(lamb_vec)
+                # Build cov_mat directly from O[k, keep] -- no subsetting matrices needed
+                Ok_sub = self._O[k, torch.tensor(keep, device=self.device)]
+                cov_mat = torch.zeros(n_keep + 1, n_keep + 1, dtype=torch.float32, device=self.device)
+                cov_mat[0, 0] = Ok_sub.sum()
+                cov_mat[0, 1:] = Ok_sub
+                cov_mat[1:, 0] = Ok_sub
+                cov_mat[1:, 1:] = torch.diag(Ok_sub)
+                cov_mat += torch.diag(lamb_vec)
 
                 if len(self.B_vec) > 1:
                     inv_cov = torch.linalg.inv(cov_mat)
                 else:
                     inv_cov = _arrowhead_inv(cov_mat)
 
-                Z_tmp = self._Z_orig[:, keep_cells_set] * Rk_sub
+                # Compute W via per-batch matrix-vector products -- no d x N Z_tmp
+                Rk = self._R[k, :]
+                z_sums = []
+                for b in keep:
+                    idx = self._batch_index[b]
+                    z_sums.append(self._Z_orig[:, idx] @ Rk[idx])
 
-                W = inv_cov[:, 0:1] @ Z_tmp.sum(dim=1, keepdim=True).T
+                z_sum_all = sum(z_sums)
+                W = inv_cov[:, 0:1] @ z_sum_all.unsqueeze(0)
                 for i in range(n_keep):
-                    batch_sum = Z_tmp[:, sub_batch_index[i]].sum(dim=1, keepdim=True)
-                    W = W + inv_cov[:, i+1:i+2] @ batch_sum.T
+                    W = W + inv_cov[:, i+1:i+2] @ z_sums[i].unsqueeze(0)
 
                 # Update centroid from intercept, then zero it out
                 self._Y[:, k] = W[0, :]
                 W[0, :] = 0
-                self._Z_corr[:, keep_cells_set] -= W.T @ sub_Phi_Rk
+
+                # Batch-wise in-place correction -- no d x N product
+                for i, b in enumerate(keep):
+                    idx = self._batch_index[b]
+                    self._Z_corr[:, idx] -= W[i+1:i+2, :].T @ self._R[k:k+1, idx]
 
         # Normalize centroids
         self._Y = self._Y / torch.linalg.norm(self._Y, ord=2, dim=0)

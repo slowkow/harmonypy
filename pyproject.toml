@@ -1,22 +1,21 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "harmonypy"
-dynamic = ["version"]
+version = "2.0.0"
 description = "A data integration algorithm."
 readme = "README.md"
-license = "mit"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.9"
 authors = [
-    { name = "Kamil Slowikowski", orcid = "0000-0002-2843-6370", email = "kslowikowski@gmail.com" },
-    { name = "John Arevalo", orcid = "0000-0002-1138-5036", email = "johnarevalo@gmail.com" }
+    { name = "Kamil Slowikowski", email = "kslowikowski@gmail.com" },
+    { name = "John Arevalo", email = "johnarevalo@gmail.com" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -33,18 +32,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/slowkow/harmonypy"
 
-[tool.hatch.version]
-path = "harmonypy/__init__.py"
+[tool.scikit-build]
+wheel.packages = ["harmonypy"]
+build.verbose = true
+build-dir = "/tmp/harmonypy-build/{wheel_tag}"
+ninja.make-fallback = true
 
-[tool.hatch.build.targets.sdist]
-include = [
-    "harmonypy/",
-    "LICENSE",
-    "README.md",
-    "pyproject.toml",
-]
-
-[tool.hatch.envs.test]
-dependencies = [
-  "pytest"
-]
+[tool.scikit-build.cmake.define]
+CMAKE_BUILD_TYPE = "Release"

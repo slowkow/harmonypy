@@ -132,9 +132,17 @@ def run_harmony(
     if isinstance(vars_use, str):
         vars_use = [vars_use]
 
-    # Create batch indicator matrix (one-hot encoded)
-    phi = pd.get_dummies(meta_data[vars_use]).to_numpy().T.astype(np.float32)
-    phi_n = meta_data[vars_use].describe().loc['unique'].to_numpy().astype(int)
+    # Build compact batch-of-cell index (n_covariates x N, int64)
+    # instead of dense B x N one-hot matrix — O(N) vs O(B*N) memory
+    batch_of_cell = np.empty((len(vars_use), N), dtype=np.int64)
+    phi_n = np.empty(len(vars_use), dtype=int)
+    offset = 0
+    for c, var in enumerate(vars_use):
+        codes, uniques = pd.factorize(meta_data[var])
+        n_levels = len(uniques)
+        batch_of_cell[c] = codes + offset
+        phi_n[c] = n_levels
+        offset += n_levels
 
     # Theta handling - default is 2 (matches R package)
     if theta is None:
@@ -166,7 +174,8 @@ def run_harmony(
             lamb = np.insert(lamb, 0, 0).astype(np.float32)
 
     # Number of items in each category
-    N_b = phi.sum(axis=1)
+    B = int(np.sum(phi_n))
+    N_b = np.bincount(batch_of_cell.ravel(), minlength=B).astype(np.float32)
     Pr_b = (N_b / N).astype(np.float32)
 
     if tau > 0:
@@ -205,7 +214,7 @@ def run_harmony(
     data_mat = np.asarray(data_mat, dtype=np.float32)
     
     ho = Harmony(
-        data_mat, phi, phi_n, N_b, Pr_b, sigma.astype(np.float32),
+        data_mat, batch_of_cell, phi_n, N_b, Pr_b, sigma.astype(np.float32),
         theta, lamb, alpha, lambda_estimation, batch_prop_cutoff,
         max_iter_harmony, max_iter_kmeans,
         epsilon_cluster, epsilon_harmony, nclust, block_size, verbose,
@@ -222,7 +231,7 @@ class Harmony:
     """
     
     def __init__(
-            self, Z, Phi, B_vec, N_b, Pr_b, sigma, theta, lamb, alpha,
+            self, Z, batch_of_cell, B_vec, N_b, Pr_b, sigma, theta, lamb, alpha,
             lambda_estimation, batch_prop_cutoff,
             max_iter_harmony, max_iter_kmeans,
             epsilon_kmeans, epsilon_harmony, K, block_size, verbose,
@@ -238,12 +247,13 @@ class Harmony:
         # Simple L2 normalization
         self._Z_cos = self._Z_orig / torch.linalg.norm(self._Z_orig, ord=2, dim=0)
 
-        # Batch indicators
-        self._Phi = torch.tensor(Phi, dtype=torch.float32, device=device)
+        # Compact batch assignment (n_covariates x N, int64) — O(N) memory
+        self._batch_of_cell = torch.tensor(batch_of_cell, dtype=torch.int64, device=device)
+        self._n_covariates = batch_of_cell.shape[0]
         self._Pr_b = torch.tensor(Pr_b, dtype=torch.float32, device=device)
 
         self.N = self._Z_corr.shape[1]
-        self.B = Phi.shape[0]
+        self.B = int(np.sum(B_vec))
         self.d = self._Z_corr.shape[0]
 
         # Covariate structure
@@ -254,14 +264,12 @@ class Harmony:
         self.covariate_bounds = np.cumsum(B_vec)
 
         # Build batch index for fast ridge correction
+        cov_of_batch = np.repeat(np.arange(len(B_vec)), B_vec)
         self._batch_index = []
         for b in range(self.B):
-            idx = torch.where(self._Phi[b, :] > 0)[0]
-            self._batch_index.append(idx)
-
-        # Create Phi_moe with intercept
-        ones = torch.ones(1, self.N, dtype=torch.float32, device=device)
-        self._Phi_moe = torch.cat([ones, self._Phi], dim=0)
+            c = cov_of_batch[b]
+            idx = np.where(batch_of_cell[c] == b)[0]
+            self._batch_index.append(torch.tensor(idx, dtype=torch.int64, device=device))
 
         self.window_size = 3
         self.epsilon_kmeans = epsilon_kmeans
@@ -331,12 +339,18 @@ class Harmony:
     @property
     def Phi(self):
         """Batch indicator matrix (N x B). One-hot encoding of batch membership."""
-        return self._Phi.cpu().numpy().T
-    
+        phi = torch.zeros(self.B, self.N, dtype=torch.float32)
+        batch_cpu = self._batch_of_cell.cpu()
+        for c in range(self._n_covariates):
+            phi.scatter_(0, batch_cpu[c:c+1], 1.0)
+        return phi.numpy().T
+
     @property
     def Phi_moe(self):
         """Batch indicator with intercept (N x (B+1)). First column is all ones."""
-        return self._Phi_moe.cpu().numpy().T
+        phi = self.Phi  # N x B numpy
+        ones = np.ones((self.N, 1), dtype=np.float32)
+        return np.hstack([ones, phi])
     
     @property
     def Pr_b(self):
@@ -370,6 +384,18 @@ class Harmony:
         self._R = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
         self._Y = torch.zeros((self.d, self.K), dtype=torch.float32, device=self.device)
 
+    def _compute_O_from_R(self):
+        """Compute O[k,b] = sum of R[k, cells_in_batch_b] via scatter_add."""
+        self._O.zero_()
+        for c in range(self._n_covariates):
+            self._O.scatter_add_(1, self._batch_of_cell[c:c+1].expand(self.K, -1), self._R)
+
+    def _scatter_add_to_O(self, block_batches, R_block, sign=1.0):
+        """Accumulate R_block contributions into O via scatter_add."""
+        src = R_block if sign > 0 else -R_block
+        for c in range(self._n_covariates):
+            self._O.scatter_add_(1, block_batches[c:c+1].expand(self.K, -1), src)
+
     def init_cluster(self, random_state):
         logger.info("Computing initial centroids with sklearn.KMeans...")
         # KMeans needs CPU numpy array
@@ -393,7 +419,7 @@ class Harmony:
         
         # Batch diversity statistics
         self._E = torch.outer(self._R.sum(dim=1), self._Pr_b)
-        self._O = self._R @ self._Phi.T
+        self._compute_O_from_R()
         
         self.compute_objective()
         self.objective_harmony.append(self.objective_kmeans[-1])
@@ -452,7 +478,7 @@ class Harmony:
             self._R.neg_().exp_()
             self._R /= self._R.sum(dim=0)
             self._E = torch.outer(self._R.sum(dim=1), self._Pr_b)
-            self._O = self._R @ self._Phi.T
+            self._compute_O_from_R()
 
         rounds = 0
         for i in range(self.max_iter_kmeans):
@@ -499,23 +525,27 @@ class Harmony:
 
             R_block = self._R[:, idx_min:idx_max]
             scale_block = self._scale_dist[:, idx_min:idx_max]
-            Phi_block = self._Phi[:, block_cells]
+            block_batches = self._batch_of_cell[:, block_cells]
 
             # Remove cells from statistics
             self._E -= torch.outer(R_block.sum(dim=1), self._Pr_b)
-            self._O -= R_block @ Phi_block.T
+            self._scatter_add_to_O(block_batches, R_block, sign=-1.0)
 
             # Recompute R for this block (harmony2 formula)
             ratio = (2 * self._E + 1) / (self._O + self._E + 1)
             ratio_powered = harmony_pow_torch(ratio, self._theta)
-            R_block_new = scale_block * (ratio_powered @ Phi_block)
+            # Gather diversity penalty for each cell from its batch assignment
+            diversity = ratio_powered[:, block_batches[0]]
+            for c in range(1, self._n_covariates):
+                diversity = diversity + ratio_powered[:, block_batches[c]]
+            R_block_new = scale_block * diversity
             R_block_sum = R_block_new.sum(dim=0)
             R_block_sum = torch.clamp(R_block_sum, min=1e-8)
             R_block_new = R_block_new / R_block_sum
 
             # Put cells back
             self._E += torch.outer(R_block_new.sum(dim=1), self._Pr_b)
-            self._O += R_block_new @ Phi_block.T
+            self._scatter_add_to_O(block_batches, R_block_new, sign=1.0)
 
             self._R[:, idx_min:idx_max] = R_block_new
 

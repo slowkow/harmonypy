@@ -144,16 +144,20 @@ public:
     }
     
     py::array_t<double> result() const { return arma_mat_to_numpy(harmony->result()); }
-    py::array_t<double> Z_corr() const { return arma_mat_to_numpy(harmony->Z_corr); }
-    py::array_t<double> Z_orig() const { return arma_mat_to_numpy(harmony->Z_orig); }
-    py::array_t<double> Z_cos() const { return arma_mat_to_numpy(harmony->Z_cos); }
-    py::array_t<double> R() const { return arma_mat_to_numpy(harmony->R); }
-    py::array_t<double> Y() const { return arma_mat_to_numpy(harmony->Y); }
+    py::array_t<double> Z_corr() const { return arma_mat_to_numpy(harmony->get_Z_corr()); }
+    py::array_t<double> Z_orig() const { return arma_mat_to_numpy(harmony->get_Z_orig()); }
+    py::array_t<double> Z_cos() const { return arma_mat_to_numpy(harmony->get_Z_cos()); }
+    py::array_t<double> R() const { return arma_mat_to_numpy(harmony->get_R()); }
+    py::array_t<double> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }
     int K() const { return harmony->K; }
     int N() const { return harmony->N; }
     int d() const { return harmony->d; }
-    std::vector<double> objective_harmony() const { return harmony->objective_harmony; }
-    std::vector<double> objective_kmeans() const { return harmony->objective_kmeans; }
+    std::vector<double> objective_harmony() const {
+        return std::vector<double>(harmony->objective_harmony.begin(), harmony->objective_harmony.end());
+    }
+    std::vector<double> objective_kmeans() const {
+        return std::vector<double>(harmony->objective_kmeans.begin(), harmony->objective_kmeans.end());
+    }
     std::vector<int> kmeans_rounds() const { return harmony->kmeans_rounds; }
 };
 

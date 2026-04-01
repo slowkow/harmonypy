@@ -472,35 +472,36 @@ class Harmony:
         self.objective_harmony.append(self.objective_kmeans[-1])
 
     def update_R(self):
-        # Compute scaled distances
-        self._scale_dist = -self._dist_mat / self._sigma[:, None]
-        self._scale_dist = torch.exp(self._scale_dist)
-        self._scale_dist = self._scale_dist / self._scale_dist.sum(dim=0)
-        
+        # Compute scaled distances in-place (reuse _scale_dist buffer)
+        torch.div(self._dist_mat, self._sigma[:, None], out=self._scale_dist)
+        self._scale_dist.neg_()
+        self._scale_dist.exp_()
+        self._scale_dist /= self._scale_dist.sum(dim=0)
+
         # Create shuffled update order
         update_order = torch.randperm(self.N, device=self.device)
-        
+
+        # Shuffle R and scale_dist in-place (no copies)
+        self._R[:] = self._R[:, update_order]
+        self._scale_dist[:] = self._scale_dist[:, update_order]
+
         # Process in blocks
         n_blocks = int(np.ceil(1.0 / self.block_size))
         cells_per_block = int(self.N * self.block_size)
-        
-        # Permute matrices
-        R_perm = self._R[:, update_order]
-        scale_perm = self._scale_dist[:, update_order]
-        Phi_perm = self._Phi[:, update_order]
-        
+
         for blk in range(n_blocks):
             idx_min = blk * cells_per_block
             idx_max = self.N if blk == n_blocks - 1 else (blk + 1) * cells_per_block
-            
-            R_block = R_perm[:, idx_min:idx_max]
-            scale_block = scale_perm[:, idx_min:idx_max]
-            Phi_block = Phi_perm[:, idx_min:idx_max]
-            
+            block_cells = update_order[idx_min:idx_max]
+
+            R_block = self._R[:, idx_min:idx_max]
+            scale_block = self._scale_dist[:, idx_min:idx_max]
+            Phi_block = self._Phi[:, block_cells]
+
             # Remove cells from statistics
             self._E -= torch.outer(R_block.sum(dim=1), self._Pr_b)
             self._O -= R_block @ Phi_block.T
-            
+
             # Recompute R for this block (harmony2 formula)
             ratio = (2 * self._E + 1) / (self._O + self._E + 1)
             ratio_powered = harmony_pow_torch(ratio, self._theta)
@@ -508,16 +509,16 @@ class Harmony:
             R_block_sum = R_block_new.sum(dim=0)
             R_block_sum = torch.clamp(R_block_sum, min=1e-8)
             R_block_new = R_block_new / R_block_sum
-            
+
             # Put cells back
             self._E += torch.outer(R_block_new.sum(dim=1), self._Pr_b)
             self._O += R_block_new @ Phi_block.T
-            
-            R_perm[:, idx_min:idx_max] = R_block_new
-        
-        # Restore original order
+
+            self._R[:, idx_min:idx_max] = R_block_new
+
+        # Restore original order in-place
         inverse_order = torch.argsort(update_order)
-        self._R = R_perm[:, inverse_order]
+        self._R[:] = self._R[:, inverse_order]
 
     def check_convergence(self, i_type):
         if i_type == 0:
@@ -541,7 +542,7 @@ class Harmony:
 
     def moe_correct_ridge(self):
         """Ridge regression correction for batch effects (harmony2)."""
-        self._Z_corr = self._Z_orig.clone()
+        self._Z_corr.copy_(self._Z_orig)
 
         for k in range(self.K):
             # Determine which batches have sufficient representation

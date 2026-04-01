@@ -136,3 +136,5 @@ dmypy.json
 .DS_Store
 
 uv.lock
+
+data/tahoe-ilya/

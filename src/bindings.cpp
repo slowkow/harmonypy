@@ -10,91 +10,60 @@
 namespace py = pybind11;
 using namespace harmony;
 
-// Convert NumPy array to Armadillo matrix
-// NumPy uses row-major (C-style), Armadillo uses column-major (Fortran-style)
+// Convert NumPy 2D array (double, row-major) to Armadillo matrix (col-major)
 arma::mat numpy_to_arma_mat(py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
     py::buffer_info buf = arr.request();
-    if (buf.ndim != 2) {
-        throw std::runtime_error("Expected 2D array");
-    }
-    
-    size_t nrows = buf.shape[0];
-    size_t ncols = buf.shape[1];
+    if (buf.ndim != 2) throw std::runtime_error("Expected 2D array");
+    size_t nrows = buf.shape[0], ncols = buf.shape[1];
     double* ptr = static_cast<double*>(buf.ptr);
-    
     arma::mat result(nrows, ncols);
-    for (size_t i = 0; i < nrows; ++i) {
-        for (size_t j = 0; j < ncols; ++j) {
+    for (size_t i = 0; i < nrows; ++i)
+        for (size_t j = 0; j < ncols; ++j)
             result(i, j) = ptr[i * ncols + j];
-        }
-    }
     return result;
 }
 
-// Convert NumPy array to Armadillo sparse matrix (CSC format expected)
-// Phi is one-hot encoded batch indicators, very sparse
-arma::sp_mat numpy_to_arma_sp_mat(py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-    py::buffer_info buf = arr.request();
-    if (buf.ndim != 2) {
-        throw std::runtime_error("Expected 2D array");
-    }
-    
-    size_t nrows = buf.shape[0];
-    size_t ncols = buf.shape[1];
-    double* ptr = static_cast<double*>(buf.ptr);
-    
-    // Count non-zeros first
-    std::vector<arma::uword> row_indices;
-    std::vector<arma::uword> col_indices;
-    std::vector<double> values;
-    
-    for (size_t i = 0; i < nrows; ++i) {
-        for (size_t j = 0; j < ncols; ++j) {
-            double val = ptr[i * ncols + j];
-            if (val != 0.0) {
-                row_indices.push_back(i);
-                col_indices.push_back(j);
-                values.push_back(val);
-            }
-        }
-    }
-    
-    // Create locations matrix
-    arma::umat locations(2, row_indices.size());
-    for (size_t i = 0; i < row_indices.size(); ++i) {
-        locations(0, i) = row_indices[i];
-        locations(1, i) = col_indices[i];
-    }
-    
-    arma::vec vals(values);
-    
-    return arma::sp_mat(locations, vals, nrows, ncols);
-}
-
-// Convert NumPy array to Armadillo vector
+// Convert NumPy 1D array to Armadillo vector
 arma::vec numpy_to_arma_vec(py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
     py::buffer_info buf = arr.request();
-    if (buf.ndim != 1) {
-        throw std::runtime_error("Expected 1D array");
-    }
-    
+    if (buf.ndim != 1) throw std::runtime_error("Expected 1D array");
     arma::vec result(buf.size);
     double* ptr = static_cast<double*>(buf.ptr);
-    for (size_t i = 0; i < static_cast<size_t>(buf.size); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(buf.size); ++i)
         result(i) = ptr[i];
-    }
     return result;
+}
+
+// Build sparse Phi (B x N) from batch_of_cell (n_cov x N, int64)
+// Each cell has one non-zero per covariate row, at its batch index.
+arma::sp_mat build_sparse_phi(py::array_t<int64_t, py::array::c_style | py::array::forcecast> batch_of_cell, int B) {
+    py::buffer_info buf = batch_of_cell.request();
+    if (buf.ndim != 2) throw std::runtime_error("batch_of_cell must be 2D");
+    size_t n_cov = buf.shape[0];
+    size_t N = buf.shape[1];
+    int64_t* ptr = static_cast<int64_t*>(buf.ptr);
+
+    // Collect (row, col) locations
+    size_t nnz = n_cov * N;
+    arma::umat locations(2, nnz);
+    arma::vec values(nnz, arma::fill::ones);
+    for (size_t c = 0; c < n_cov; ++c) {
+        for (size_t j = 0; j < N; ++j) {
+            size_t idx = c * N + j;
+            locations(0, idx) = static_cast<arma::uword>(ptr[c * N + j]);
+            locations(1, idx) = static_cast<arma::uword>(j);
+        }
+    }
+    return arma::sp_mat(locations, values, B, N);
 }
 
 // Convert Armadillo matrix to NumPy array
 py::array_t<double> arma_mat_to_numpy(const arma::mat& m) {
     py::array_t<double> result({static_cast<ssize_t>(m.n_rows), static_cast<ssize_t>(m.n_cols)});
     auto buf = result.mutable_unchecked<2>();
-    for (size_t i = 0; i < m.n_rows; ++i) {
-        for (size_t j = 0; j < m.n_cols; ++j) {
+    for (size_t i = 0; i < m.n_rows; ++i)
+        for (size_t j = 0; j < m.n_cols; ++j)
             buf(i, j) = m(i, j);
-        }
-    }
     return result;
 }
 
@@ -102,10 +71,10 @@ py::array_t<double> arma_mat_to_numpy(const arma::mat& m) {
 class HarmonyWrapper {
 public:
     std::unique_ptr<Harmony> harmony;
-    
+
     HarmonyWrapper(
         py::array_t<double> Z,
-        py::array_t<double> Phi,       // Will be converted to sparse
+        py::array_t<int64_t> batch_of_cell,  // n_cov x N int64 — compact, O(N) memory
         py::array_t<double> Pr_b,
         py::array_t<double> sigma,
         py::array_t<double> theta,
@@ -122,9 +91,12 @@ public:
         bool verbose,
         int random_state
     ) {
+        int B = 0;
+        for (auto v : B_vec) B += v;
+
         harmony = std::make_unique<Harmony>(
             numpy_to_arma_mat(Z),
-            numpy_to_arma_sp_mat(Phi),  // Convert to sparse
+            build_sparse_phi(batch_of_cell, B),  // Build sparse from compact indices
             numpy_to_arma_vec(Pr_b),
             numpy_to_arma_vec(sigma),
             numpy_to_arma_vec(theta),
@@ -142,7 +114,7 @@ public:
             random_state
         );
     }
-    
+
     py::array_t<double> result() const { return arma_mat_to_numpy(harmony->result()); }
     py::array_t<double> Z_corr() const { return arma_mat_to_numpy(harmony->get_Z_corr()); }
     py::array_t<double> Z_orig() const { return arma_mat_to_numpy(harmony->get_Z_orig()); }
@@ -163,11 +135,11 @@ public:
 
 PYBIND11_MODULE(_harmony_cpp, m) {
     m.doc() = "C++ implementation of Harmony algorithm (matches R package)";
-    
+
     py::class_<HarmonyWrapper>(m, "HarmonyCpp")
         .def(py::init<
             py::array_t<double>,   // Z
-            py::array_t<double>,   // Phi (converted to sparse internally)
+            py::array_t<int64_t>,  // batch_of_cell (n_cov x N)
             py::array_t<double>,   // Pr_b
             py::array_t<double>,   // sigma
             py::array_t<double>,   // theta
@@ -185,7 +157,7 @@ PYBIND11_MODULE(_harmony_cpp, m) {
             int                    // random_state
         >(),
             py::arg("Z"),
-            py::arg("Phi"),
+            py::arg("batch_of_cell"),
             py::arg("Pr_b"),
             py::arg("sigma"),
             py::arg("theta"),
@@ -211,7 +183,7 @@ PYBIND11_MODULE(_harmony_cpp, m) {
         .def_property_readonly("K", &HarmonyWrapper::K, "Number of clusters")
         .def_property_readonly("N", &HarmonyWrapper::N, "Number of cells")
         .def_property_readonly("d", &HarmonyWrapper::d, "Number of dimensions")
-        .def_property_readonly("objective_harmony", &HarmonyWrapper::objective_harmony, 
+        .def_property_readonly("objective_harmony", &HarmonyWrapper::objective_harmony,
                               "Harmony objective values per iteration")
         .def_property_readonly("objective_kmeans", &HarmonyWrapper::objective_kmeans,
                               "K-means objective values")

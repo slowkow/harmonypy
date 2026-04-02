@@ -236,14 +236,9 @@ def run_harmony(
         if verbose:
             logger.info("Using C++ backend (Armadillo)")
 
-        # C++ needs dense Phi (B x N) and float64
-        phi = np.zeros((B, N), dtype=np.float64)
-        for c in range(len(vars_use)):
-            for j in range(N):
-                phi[batch_of_cell[c, j], j] = 1.0
-
+        # Pass batch_of_cell directly — C++ builds sparse Phi, no dense B×N array
         data_f64 = np.ascontiguousarray(data_mat.astype(np.float64))
-        phi_f64 = np.ascontiguousarray(phi)
+        batch_of_cell_c = np.ascontiguousarray(batch_of_cell)
 
         # Signal lambda estimation with sentinel [-1]
         if lambda_estimation:
@@ -253,7 +248,7 @@ def run_harmony(
 
         cpp_harmony = HarmonyCpp(
             data_f64,
-            phi_f64,
+            batch_of_cell_c,
             Pr_b.astype(np.float64),
             sigma.astype(np.float64),
             theta.astype(np.float64),

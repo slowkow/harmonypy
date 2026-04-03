@@ -427,11 +427,17 @@ void Harmony::moe_correct_ridge() {
             else
                 lambda_mat.diag() = lambda;
 
-            SPMAT _Rk(N, N);
-            _Rk.diag() = VECTYPE(R.row(k).t());
-
-            SPMAT Phi_Rk = Phi_moe * _Rk;
-            MATTYPE Phi_cov = MATTYPE(Phi_Rk * Phi_moe_t + lambda_mat);
+            // Build Phi_cov directly from O[k,:] — no N×N sparse Rk needed
+            VECTYPE Ok = VECTYPE(O.row(k).t());
+            MATTYPE Phi_cov(B + 1, B + 1, arma::fill::zeros);
+            float Ok_sum = arma::accu(Ok);
+            Phi_cov(0, 0) = Ok_sum;
+            for (int b = 0; b < B; ++b) {
+                Phi_cov(0, b + 1) = Ok(b);
+                Phi_cov(b + 1, 0) = Ok(b);
+                Phi_cov(b + 1, b + 1) = Ok(b);
+            }
+            Phi_cov += MATTYPE(lambda_mat);
 
             MATTYPE inv_cov;
             if (B_vec.size() > 1) {
@@ -450,73 +456,33 @@ void Harmony::moe_correct_ridge() {
                 inv_cov.diag() += b;
             }
 
-            MATTYPE Z_tmp = Z_orig.each_row() % R.row(k);
-
-            W = inv_cov.col(0) * arma::sum(Z_tmp, 1).t();
+            // Compute W via per-batch matrix-vector products (no d×N Z_tmp)
+            VECTYPE Rk = VECTYPE(R.row(k).t());
+            std::vector<VECTYPE> z_sums(B);
+            VECTYPE z_sum_all(d, arma::fill::zeros);
             for (int b = 0; b < B; ++b) {
-                W += inv_cov.col(b + 1) * arma::sum(Z_tmp.cols(batch_index[b]), 1).t();
+                z_sums[b] = Z_orig.cols(batch_index[b]) * Rk.rows(batch_index[b]);
+                z_sum_all += z_sums[b];
+            }
+
+            W = inv_cov.col(0) * z_sum_all.t();
+            for (int b = 0; b < B; ++b) {
+                W += inv_cov.col(b + 1) * z_sums[b].t();
             }
 
             Y.col(k) = W.row(0).t();
             W.row(0).zeros();
-            Z_corr -= W.t() * Phi_Rk;
+
+            // Batch-wise correction (no d×N product, no N×N Rk)
+            for (int b = 0; b < B; ++b) {
+                Z_corr.cols(batch_index[b]) -= W.row(b + 1).t() * Rk.rows(batch_index[b]).t();
+            }
 
         } else {
-            // Subset to qualifying batches and their cells
-            std::set<unsigned> keep_cells_set;
-            for (auto b : keep) {
-                for (unsigned i = 0; i < batch_index[b].n_elem; ++i) {
-                    keep_cells_set.insert(batch_index[b](i));
-                }
-            }
-
-            arma::uvec keep_cols = arma::conv_to<arma::uvec>::from(
-                std::vector<unsigned>(keep_cells_set.begin(), keep_cells_set.end()));
-
+            // Subset to qualifying batches
             unsigned n_keep = keep.size();
-            unsigned n_cells = keep_cols.n_elem;
 
-            std::vector<int> cell_map(N, -1);
-            for (unsigned i = 0; i < n_cells; ++i) {
-                cell_map[keep_cols(i)] = i;
-            }
-
-            std::vector<arma::uvec> sub_batch_index(n_keep);
-            for (unsigned i = 0; i < n_keep; ++i) {
-                unsigned b = keep[i];
-                std::vector<unsigned> mapped;
-                mapped.reserve(batch_index[b].n_elem);
-                for (unsigned j = 0; j < batch_index[b].n_elem; ++j) {
-                    int mi = cell_map[batch_index[b](j)];
-                    if (mi >= 0) mapped.push_back(static_cast<unsigned>(mi));
-                }
-                sub_batch_index[i] = arma::conv_to<arma::uvec>::from(mapped);
-            }
-
-            // Build subsetted Phi_moe sparse
-            arma::umat locations(2, n_cells + n_cells);
-            arma::Col<float> values(n_cells + n_cells);
-            unsigned nnz = 0;
-            for (unsigned j = 0; j < n_cells; ++j) {
-                locations(0, nnz) = 0;
-                locations(1, nnz) = j;
-                values(nnz) = 1.0f;
-                nnz++;
-            }
-            for (unsigned i = 0; i < n_keep; ++i) {
-                for (unsigned j = 0; j < sub_batch_index[i].n_elem; ++j) {
-                    locations(0, nnz) = i + 1;
-                    locations(1, nnz) = sub_batch_index[i](j);
-                    values(nnz) = 1.0f;
-                    nnz++;
-                }
-            }
-            locations = locations.cols(0, nnz - 1);
-            values = values.subvec(0, nnz - 1);
-
-            SPMAT sub_Phi_moe(locations, values, n_keep + 1, n_cells);
-            SPMAT sub_Phi_moe_t = sub_Phi_moe.t();
-
+            // Lambda for subsetted batches
             SPMAT lambda_mat(n_keep + 1, n_keep + 1);
             if (lambda_estimation) {
                 arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
@@ -531,21 +497,27 @@ void Harmony::moe_correct_ridge() {
                 lambda_mat.diag() = ltmp;
             }
 
-            VECTYPE Rk_full = VECTYPE(R.row(k).t());
-            SPMAT sub_Rk(n_cells, n_cells);
-            sub_Rk.diag() = Rk_full.rows(keep_cols);
-
-            SPMAT sub_Phi_Rk = sub_Phi_moe * sub_Rk;
-            MATTYPE sub_Phi_cov = MATTYPE(sub_Phi_Rk * sub_Phi_moe_t + lambda_mat);
+            // Build cov_mat directly from O[k, keep]
+            VECTYPE Ok_sub(n_keep);
+            for (unsigned i = 0; i < n_keep; ++i) Ok_sub(i) = O(k, keep[i]);
+            MATTYPE cov_mat(n_keep + 1, n_keep + 1, arma::fill::zeros);
+            float Ok_sub_sum = arma::accu(Ok_sub);
+            cov_mat(0, 0) = Ok_sub_sum;
+            for (unsigned i = 0; i < n_keep; ++i) {
+                cov_mat(0, i + 1) = Ok_sub(i);
+                cov_mat(i + 1, 0) = Ok_sub(i);
+                cov_mat(i + 1, i + 1) = Ok_sub(i);
+            }
+            cov_mat += MATTYPE(lambda_mat);
 
             MATTYPE inv_cov;
             if (B_vec.size() > 1)
-                inv_cov = arma::inv(sub_Phi_cov);
+                inv_cov = arma::inv(cov_mat);
             else {
-                VECTYPE ac = -VECTYPE(sub_Phi_cov.row(0).t());
+                VECTYPE ac = -VECTYPE(cov_mat.row(0).t());
                 ac(0) = 1;
-                float b0 = sub_Phi_cov(0, 0);
-                VECTYPE b = 1.0f / sub_Phi_cov.diag();
+                float b0 = cov_mat(0, 0);
+                VECTYPE b = 1.0f / cov_mat.diag();
                 b(0) = 0;
                 float u = b0 - arma::accu(arma::square(ac) % b);
                 VECTYPE ac_b = ac % b;
@@ -554,18 +526,29 @@ void Harmony::moe_correct_ridge() {
                 inv_cov.diag() += b;
             }
 
-            MATTYPE Z_tmp = Z_orig.cols(keep_cols);
-            Z_tmp = Z_tmp.each_row() % Rk_full.rows(keep_cols).t();
-
-            MATTYPE W_sub = inv_cov.col(0) * arma::sum(Z_tmp, 1).t();
+            // Compute W via per-batch matrix-vector products
+            VECTYPE Rk = VECTYPE(R.row(k).t());
+            std::vector<VECTYPE> z_sums(n_keep);
+            VECTYPE z_sum_all(d, arma::fill::zeros);
             for (unsigned i = 0; i < n_keep; ++i) {
-                W_sub += inv_cov.col(i + 1) * arma::sum(Z_tmp.cols(sub_batch_index[i]), 1).t();
+                unsigned b = keep[i];
+                z_sums[i] = Z_orig.cols(batch_index[b]) * Rk.rows(batch_index[b]);
+                z_sum_all += z_sums[i];
+            }
+
+            MATTYPE W_sub = inv_cov.col(0) * z_sum_all.t();
+            for (unsigned i = 0; i < n_keep; ++i) {
+                W_sub += inv_cov.col(i + 1) * z_sums[i].t();
             }
 
             Y.col(k) = W_sub.row(0).t();
             W_sub.row(0).zeros();
-            MATTYPE correction = W_sub.t() * sub_Phi_Rk;
-            Z_corr.cols(keep_cols) -= correction;
+
+            // Batch-wise correction
+            for (unsigned i = 0; i < n_keep; ++i) {
+                unsigned b = keep[i];
+                Z_corr.cols(batch_index[b]) -= W_sub.row(i + 1).t() * Rk.rows(batch_index[b]).t();
+            }
         }
     }
 

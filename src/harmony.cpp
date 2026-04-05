@@ -227,21 +227,20 @@ void Harmony::compute_objective() {
 
     float kmeans_error = arma::accu(R % dist_mat);
 
-    // Entropy: sum(xlogy(R, R) * sigma)
-    MATTYPE log_R = R;
-    log_R.transform([](float val) { return val > 0 ? std::log(val) : 0.0f; });
-    MATTYPE entropy_mat = R % log_R;
-    entropy_mat.each_col() %= sigma;
-    float _entropy = arma::accu(entropy_mat);
+    // Entropy: sum_k sigma_k * sum_j R[k,j]*log(R[k,j])
+    // Single K×N temporary (xlogy), then sum per-row and dot with sigma
+    MATTYPE xlogx = R;
+    xlogx.transform([](float val) { return val > 0 ? val * std::log(val) : 0.0f; });
+    float _entropy = arma::dot(VECTYPE(arma::sum(xlogx, 1)), sigma);
 
-    // Cross entropy (harmony2 formula)
-    MATTYPE R_sigma = R;
-    R_sigma.each_col() %= sigma;
+    // Cross entropy: use O directly instead of K×N matmul
+    // Identity: sum(R*sigma * (theta_log @ Phi)) = sum(sigma * O * theta_log)
     MATTYPE ratio = (O + E + 1) / (2 * E + 1);
-    MATTYPE log_ratio = ratio;
-    log_ratio.transform([](float val) { return std::log(val); });
-    MATTYPE theta_log = arma::repmat(theta.t(), K, 1) % log_ratio;
-    float _cross_entropy = arma::accu(R_sigma % (theta_log * Phi));
+    ratio.transform([](float val) { return std::log(val); });
+    MATTYPE theta_log = arma::repmat(theta.t(), K, 1) % ratio;
+    MATTYPE sigma_O = O;
+    sigma_O.each_col() %= sigma;
+    float _cross_entropy = arma::accu(sigma_O % theta_log);
 
     objective_kmeans.push_back((kmeans_error + _entropy + _cross_entropy) * norm_const);
     objective_kmeans_dist.push_back(kmeans_error * norm_const);

@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "numpy",
     "pandas",
+    "pytest>=8.4.2",
     "scikit-learn",
     "scipy",
     "torch",

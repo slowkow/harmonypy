@@ -361,8 +361,8 @@ class Harmony:
         self._Z_corr = torch.tensor(Z, dtype=torch.float32, device=device)
         self._Z_orig = torch.tensor(Z, dtype=torch.float32, device=device)
 
-        # Simple L2 normalization
-        self._Z_cos = self._Z_orig / torch.linalg.norm(self._Z_orig, ord=2, dim=0)
+        # Normalize Z_corr in-place (serves as Z_cos; no separate buffer — matches C++)
+        self._Z_corr /= torch.linalg.norm(self._Z_corr, ord=2, dim=0)
 
         # Compact batch assignment (n_covariates x N, int64) — O(N) memory
         self._batch_of_cell = torch.tensor(batch_of_cell, dtype=torch.int64, device=device)
@@ -431,7 +431,7 @@ class Harmony:
     @property
     def Z_cos(self):
         """L2-normalized embedding matrix (N x d). Used for clustering."""
-        return self._Z_cos.cpu().numpy().T
+        return self._Z_corr.cpu().numpy().T
     
     @property
     def R(self):
@@ -494,7 +494,6 @@ class Harmony:
         return self._Z_corr.cpu().numpy().T
 
     def allocate_buffers(self):
-        self._scale_dist = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
         self._dist_mat = torch.zeros((self.K, self.N), dtype=torch.float32, device=self.device)
         self._O = torch.zeros((self.K, self.B), dtype=torch.float32, device=self.device)
         self._E = torch.zeros((self.K, self.B), dtype=torch.float32, device=self.device)
@@ -515,8 +514,8 @@ class Harmony:
 
     def init_cluster(self, random_state):
         logger.info("Computing initial centroids with sklearn.KMeans...")
-        # KMeans needs CPU numpy array
-        Z_cos_np = self._Z_cos.cpu().numpy()
+        # KMeans needs CPU numpy array (Z_corr is L2-normalized at this point)
+        Z_cos_np = self._Z_corr.cpu().numpy()
         model = KMeans(n_clusters=self.K, init='k-means++',
                        n_init=1, max_iter=25, random_state=random_state)
         model.fit(Z_cos_np.T)
@@ -527,7 +526,7 @@ class Harmony:
         self._Y = self._Y / torch.linalg.norm(self._Y, ord=2, dim=0)
         
         # Compute distance matrix: dist = 2 * (1 - Y.T @ Z_cos)
-        self._dist_mat = 2 * (1 - self._Y.T @ self._Z_cos)
+        self._dist_mat = 2 * (1 - self._Y.T @ self._Z_corr)
         
         # Compute R
         self._R = -self._dist_mat / self._sigma[:, None]
@@ -587,8 +586,8 @@ class Harmony:
         # Cold-start R re-estimation after correction (harmony2)
         # On iterations after the first, R is stale because Z_corr changed
         if len(self.objective_harmony) > 1:
-            torch.div(self._Z_corr, torch.linalg.norm(self._Z_corr, ord=2, dim=0), out=self._Z_cos)
-            torch.mm(self._Y.T, self._Z_cos, out=self._dist_mat)
+            self._Z_corr /= torch.linalg.norm(self._Z_corr, ord=2, dim=0)
+            torch.mm(self._Y.T, self._Z_corr, out=self._dist_mat)
             self._dist_mat.mul_(-2).add_(2)  # dist = 2*(1 - Y.T @ Z_cos)
             # Compute R in-place from dist_mat
             torch.div(self._dist_mat, self._sigma[:, None], out=self._R)
@@ -618,18 +617,12 @@ class Harmony:
         self.objective_harmony.append(self.objective_kmeans[-1])
 
     def update_R(self):
-        # Compute scaled distances in-place (reuse _scale_dist buffer)
-        torch.div(self._dist_mat, self._sigma[:, None], out=self._scale_dist)
-        self._scale_dist.neg_()
-        self._scale_dist.exp_()
-        self._scale_dist /= self._scale_dist.sum(dim=0)
-
         # Create shuffled update order
         update_order = torch.randperm(self.N, device=self.device)
 
-        # Shuffle R and scale_dist in-place (no copies)
+        # Shuffle R and dist_mat in-place (no separate _scale_dist buffer — matches C++)
         self._R[:] = self._R[:, update_order]
-        self._scale_dist[:] = self._scale_dist[:, update_order]
+        self._dist_mat[:] = self._dist_mat[:, update_order]
 
         # Process in blocks
         n_blocks = int(np.ceil(1.0 / self.block_size))
@@ -641,17 +634,20 @@ class Harmony:
             block_cells = update_order[idx_min:idx_max]
 
             R_block = self._R[:, idx_min:idx_max]
-            scale_block = self._scale_dist[:, idx_min:idx_max]
+            dist_block = self._dist_mat[:, idx_min:idx_max]
             block_batches = self._batch_of_cell[:, block_cells]
 
             # Remove cells from statistics
             self._E -= torch.outer(R_block.sum(dim=1), self._Pr_b)
             self._scatter_add_to_O(block_batches, R_block, sign=-1.0)
 
-            # Recompute R for this block (harmony2 formula)
+            # Recompute R for this block from dist_mat (no _scale_dist buffer)
+            scale_block = torch.exp(-dist_block / self._sigma[:, None])
+            scale_block /= scale_block.sum(dim=0)
+
+            # Diversity penalty (harmony2 formula)
             ratio = (2 * self._E + 1) / (self._O + self._E + 1)
             ratio_powered = harmony_pow_torch(ratio, self._theta)
-            # Gather diversity penalty for each cell from its batch assignment
             diversity = ratio_powered[:, block_batches[0]]
             for c in range(1, self._n_covariates):
                 diversity = diversity + ratio_powered[:, block_batches[c]]
@@ -669,6 +665,7 @@ class Harmony:
         # Restore original order in-place
         inverse_order = torch.argsort(update_order)
         self._R[:] = self._R[:, inverse_order]
+        self._dist_mat[:] = self._dist_mat[:, inverse_order]
 
     def check_convergence(self, i_type):
         if i_type == 0:
@@ -813,8 +810,7 @@ class Harmony:
 
         # Normalize centroids
         self._Y = self._Y / torch.linalg.norm(self._Y, ord=2, dim=0)
-        # Update Z_cos
-        self._Z_cos = self._Z_corr / torch.linalg.norm(self._Z_corr, ord=2, dim=0)
+        # Z_corr will be re-normalized at the start of the next cluster() call
 
 
 def harmony_pow_torch(A, T):

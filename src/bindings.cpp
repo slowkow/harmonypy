@@ -2,20 +2,24 @@
 // Copyright (C) 2018  Ilya Korsunsky
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/vector.h>
 #include "harmony.hpp"
 
-namespace py = pybind11;
+namespace nb = nanobind;
 using namespace harmony;
 
+// Input array types (C-contiguous, CPU)
+using NpDouble2D = nb::ndarray<double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+using NpDouble1D = nb::ndarray<double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+using NpInt64_2D = nb::ndarray<int64_t, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+
 // Convert NumPy 2D array (double, row-major) to Armadillo matrix (col-major)
-arma::mat numpy_to_arma_mat(py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-    py::buffer_info buf = arr.request();
-    if (buf.ndim != 2) throw std::runtime_error("Expected 2D array");
-    size_t nrows = buf.shape[0], ncols = buf.shape[1];
-    double* ptr = static_cast<double*>(buf.ptr);
+arma::mat numpy_to_arma_mat(NpDouble2D arr) {
+    size_t nrows = arr.shape(0), ncols = arr.shape(1);
+    const double* ptr = arr.data();
     arma::mat result(nrows, ncols);
     for (size_t i = 0; i < nrows; ++i)
         for (size_t j = 0; j < ncols; ++j)
@@ -24,24 +28,21 @@ arma::mat numpy_to_arma_mat(py::array_t<double, py::array::c_style | py::array::
 }
 
 // Convert NumPy 1D array to Armadillo vector
-arma::vec numpy_to_arma_vec(py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
-    py::buffer_info buf = arr.request();
-    if (buf.ndim != 1) throw std::runtime_error("Expected 1D array");
-    arma::vec result(buf.size);
-    double* ptr = static_cast<double*>(buf.ptr);
-    for (size_t i = 0; i < static_cast<size_t>(buf.size); ++i)
+arma::vec numpy_to_arma_vec(NpDouble1D arr) {
+    size_t n = arr.shape(0);
+    const double* ptr = arr.data();
+    arma::vec result(n);
+    for (size_t i = 0; i < n; ++i)
         result(i) = ptr[i];
     return result;
 }
 
 // Build sparse Phi (B x N) from batch_of_cell (n_cov x N, int64)
 // Each cell has one non-zero per covariate row, at its batch index.
-arma::sp_mat build_sparse_phi(py::array_t<int64_t, py::array::c_style | py::array::forcecast> batch_of_cell, int B) {
-    py::buffer_info buf = batch_of_cell.request();
-    if (buf.ndim != 2) throw std::runtime_error("batch_of_cell must be 2D");
-    size_t n_cov = buf.shape[0];
-    size_t N = buf.shape[1];
-    int64_t* ptr = static_cast<int64_t*>(buf.ptr);
+arma::sp_mat build_sparse_phi(NpInt64_2D batch_of_cell, int B) {
+    size_t n_cov = batch_of_cell.shape(0);
+    size_t N = batch_of_cell.shape(1);
+    const int64_t* ptr = batch_of_cell.data();
 
     // Collect (row, col) locations
     size_t nnz = n_cov * N;
@@ -57,14 +58,17 @@ arma::sp_mat build_sparse_phi(py::array_t<int64_t, py::array::c_style | py::arra
     return arma::sp_mat(locations, values, B, N);
 }
 
-// Convert Armadillo matrix to NumPy array
-py::array_t<double> arma_mat_to_numpy(const arma::mat& m) {
-    py::array_t<double> result({static_cast<ssize_t>(m.n_rows), static_cast<ssize_t>(m.n_cols)});
-    auto buf = result.mutable_unchecked<2>();
-    for (size_t i = 0; i < m.n_rows; ++i)
-        for (size_t j = 0; j < m.n_cols; ++j)
-            buf(i, j) = m(i, j);
-    return result;
+// Convert Armadillo matrix to NumPy array (returns owned memory via capsule)
+nb::ndarray<nb::numpy, double, nb::ndim<2>> arma_mat_to_numpy(const arma::mat& m) {
+    size_t nrows = m.n_rows, ncols = m.n_cols;
+    double* data = new double[nrows * ncols];
+    for (size_t i = 0; i < nrows; ++i)
+        for (size_t j = 0; j < ncols; ++j)
+            data[i * ncols + j] = m(i, j);
+
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+    size_t shape[2] = { nrows, ncols };
+    return nb::ndarray<nb::numpy, double, nb::ndim<2>>(data, 2, shape, std::move(owner));
 }
 
 // Wrapper class that handles numpy conversion
@@ -73,12 +77,12 @@ public:
     std::unique_ptr<Harmony> harmony;
 
     HarmonyWrapper(
-        py::array_t<double> Z,
-        py::array_t<int64_t> batch_of_cell,  // n_cov x N int64 — compact, O(N) memory
-        py::array_t<double> Pr_b,
-        py::array_t<double> sigma,
-        py::array_t<double> theta,
-        py::array_t<double> lambda,
+        NpDouble2D Z,
+        NpInt64_2D batch_of_cell,  // n_cov x N int64 — compact, O(N) memory
+        NpDouble1D Pr_b,
+        NpDouble1D sigma,
+        NpDouble1D theta,
+        NpDouble1D lambda,
         double alpha,
         int max_iter_harmony,
         int max_iter_kmeans,
@@ -115,12 +119,12 @@ public:
         );
     }
 
-    py::array_t<double> result() const { return arma_mat_to_numpy(harmony->result()); }
-    py::array_t<double> Z_corr() const { return arma_mat_to_numpy(harmony->get_Z_corr()); }
-    py::array_t<double> Z_orig() const { return arma_mat_to_numpy(harmony->get_Z_orig()); }
-    py::array_t<double> Z_cos() const { return arma_mat_to_numpy(harmony->get_Z_cos()); }
-    py::array_t<double> R() const { return arma_mat_to_numpy(harmony->get_R()); }
-    py::array_t<double> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> result() const { return arma_mat_to_numpy(harmony->result()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_corr() const { return arma_mat_to_numpy(harmony->get_Z_corr()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_orig() const { return arma_mat_to_numpy(harmony->get_Z_orig()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const { return arma_mat_to_numpy(harmony->get_Z_cos()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> R() const { return arma_mat_to_numpy(harmony->get_R()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }
     int K() const { return harmony->K; }
     int N() const { return harmony->N; }
     int d() const { return harmony->d; }
@@ -133,17 +137,17 @@ public:
     std::vector<int> kmeans_rounds() const { return harmony->kmeans_rounds; }
 };
 
-PYBIND11_MODULE(_harmony_cpp, m) {
+NB_MODULE(_harmony_cpp, m) {
     m.doc() = "C++ implementation of Harmony algorithm (matches R package)";
 
-    py::class_<HarmonyWrapper>(m, "HarmonyCpp")
-        .def(py::init<
-            py::array_t<double>,   // Z
-            py::array_t<int64_t>,  // batch_of_cell (n_cov x N)
-            py::array_t<double>,   // Pr_b
-            py::array_t<double>,   // sigma
-            py::array_t<double>,   // theta
-            py::array_t<double>,   // lambda
+    nb::class_<HarmonyWrapper>(m, "HarmonyCpp")
+        .def(nb::init<
+            NpDouble2D,            // Z
+            NpInt64_2D,            // batch_of_cell (n_cov x N)
+            NpDouble1D,            // Pr_b
+            NpDouble1D,            // sigma
+            NpDouble1D,            // theta
+            NpDouble1D,            // lambda
             double,                // alpha
             int,                   // max_iter_harmony
             int,                   // max_iter_kmeans
@@ -156,37 +160,43 @@ PYBIND11_MODULE(_harmony_cpp, m) {
             bool,                  // verbose
             int                    // random_state
         >(),
-            py::arg("Z"),
-            py::arg("batch_of_cell"),
-            py::arg("Pr_b"),
-            py::arg("sigma"),
-            py::arg("theta"),
-            py::arg("lambda"),
-            py::arg("alpha"),
-            py::arg("max_iter_harmony"),
-            py::arg("max_iter_kmeans"),
-            py::arg("epsilon_kmeans"),
-            py::arg("epsilon_harmony"),
-            py::arg("K"),
-            py::arg("block_size"),
-            py::arg("B_vec"),
-            py::arg("batch_proportion_cutoff"),
-            py::arg("verbose"),
-            py::arg("random_state")
+            nb::arg("Z"),
+            nb::arg("batch_of_cell"),
+            nb::arg("Pr_b"),
+            nb::arg("sigma"),
+            nb::arg("theta"),
+            nb::arg("lambda"),
+            nb::arg("alpha"),
+            nb::arg("max_iter_harmony"),
+            nb::arg("max_iter_kmeans"),
+            nb::arg("epsilon_kmeans"),
+            nb::arg("epsilon_harmony"),
+            nb::arg("K"),
+            nb::arg("block_size"),
+            nb::arg("B_vec"),
+            nb::arg("batch_proportion_cutoff"),
+            nb::arg("verbose"),
+            nb::arg("random_state")
         )
-        .def("result", &HarmonyWrapper::result, "Get the corrected data matrix")
-        .def_property_readonly("Z_corr", &HarmonyWrapper::Z_corr, "Corrected data matrix (d x N)")
-        .def_property_readonly("Z_orig", &HarmonyWrapper::Z_orig, "Original data matrix (d x N)")
-        .def_property_readonly("Z_cos", &HarmonyWrapper::Z_cos, "L2-normalized data matrix (d x N)")
-        .def_property_readonly("R", &HarmonyWrapper::R, "Soft cluster assignments (K x N)")
-        .def_property_readonly("Y", &HarmonyWrapper::Y, "Cluster centroids (d x K)")
-        .def_property_readonly("K", &HarmonyWrapper::K, "Number of clusters")
-        .def_property_readonly("N", &HarmonyWrapper::N, "Number of cells")
-        .def_property_readonly("d", &HarmonyWrapper::d, "Number of dimensions")
-        .def_property_readonly("objective_harmony", &HarmonyWrapper::objective_harmony,
-                              "Harmony objective values per iteration")
-        .def_property_readonly("objective_kmeans", &HarmonyWrapper::objective_kmeans,
-                              "K-means objective values")
-        .def_property_readonly("kmeans_rounds", &HarmonyWrapper::kmeans_rounds,
-                              "Number of k-means rounds per harmony iteration");
+        .def("result", &HarmonyWrapper::result, nb::rv_policy::move,
+             "Get the corrected data matrix")
+        .def_prop_ro("Z_corr", &HarmonyWrapper::Z_corr, nb::rv_policy::move,
+                      "Corrected data matrix (d x N)")
+        .def_prop_ro("Z_orig", &HarmonyWrapper::Z_orig, nb::rv_policy::move,
+                      "Original data matrix (d x N)")
+        .def_prop_ro("Z_cos", &HarmonyWrapper::Z_cos, nb::rv_policy::move,
+                      "L2-normalized data matrix (d x N)")
+        .def_prop_ro("R", &HarmonyWrapper::R, nb::rv_policy::move,
+                      "Soft cluster assignments (K x N)")
+        .def_prop_ro("Y", &HarmonyWrapper::Y, nb::rv_policy::move,
+                      "Cluster centroids (d x K)")
+        .def_prop_ro("K", &HarmonyWrapper::K, "Number of clusters")
+        .def_prop_ro("N", &HarmonyWrapper::N, "Number of cells")
+        .def_prop_ro("d", &HarmonyWrapper::d, "Number of dimensions")
+        .def_prop_ro("objective_harmony", &HarmonyWrapper::objective_harmony,
+                      "Harmony objective values per iteration")
+        .def_prop_ro("objective_kmeans", &HarmonyWrapper::objective_kmeans,
+                      "K-means objective values")
+        .def_prop_ro("kmeans_rounds", &HarmonyWrapper::kmeans_rounds,
+                      "Number of k-means rounds per harmony iteration");
 }

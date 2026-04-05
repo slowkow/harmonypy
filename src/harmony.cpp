@@ -215,7 +215,7 @@ void Harmony::init_cluster() {
     R.transform([](float val) { return std::exp(val); });
     R.each_row() /= arma::sum(R, 0);
 
-    E = arma::sum(R, 1) * Pr_b.t();
+    E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
     O = R * Phi_t;
 
     compute_objective();
@@ -280,7 +280,7 @@ void Harmony::cluster() {
         R.each_col() /= sigma;
         R.transform([](float val) { return std::exp(val); });
         R.each_row() /= arma::sum(R, 0);
-        E = arma::sum(R, 1) * Pr_b.t();
+        E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
         O = R * Phi_t;
     }
 
@@ -339,7 +339,7 @@ void Harmony::update_R() {
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
 
         // Step 1: remove cells
-        E -= arma::sum(Rcells, 1) * Pr_b.t();
+        E -= VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
         O -= Rcells * Phi_tcells;
 
         // Step 2: recompute R from dist_mat (no _scale_dist buffer)
@@ -351,7 +351,7 @@ void Harmony::update_R() {
         Rcells = arma::normalise(Rcells, 1, 0);
 
         // Step 3: put cells back
-        E += arma::sum(Rcells, 1) * Pr_b.t();
+        E += VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
         O += Rcells * Phi_tcells;
     }
 

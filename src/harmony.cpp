@@ -133,20 +133,10 @@ Harmony::Harmony(
     // Z_corr = L2-normalized Z_orig (no separate Z_cos — matches R)
     Z_corr = arma::normalise(Z_orig, 2, 0);
 
-    // Sparse batch indicators (convert to float sparse)
-    Phi = arma::conv_to<SPMAT>::from(Phi_in);
-    Phi_t = Phi.t();
-
-    // Phi_moe: intercept row + Phi
-    SPMAT intercept(1, Phi.n_cols);
-    for (unsigned i = 0; i < Phi.n_cols; ++i) intercept(0, i) = 1.0f;
-    Phi_moe = arma::join_cols(intercept, Phi);
-    Phi_moe_t = Phi_moe.t();
-
     Pr_b = arma::conv_to<VECTYPE>::from(Pr_b_in);
     N = Z.n_cols;
     d = Z.n_rows;
-    B = Phi.n_rows;
+    B = Phi_in.n_rows;
 
     sigma = arma::conv_to<VECTYPE>::from(sigma_in);
     theta = arma::conv_to<VECTYPE>::from(theta_in);
@@ -167,7 +157,7 @@ Harmony::Harmony(
         covariate_bounds[i] = cumsum;
     }
 
-    build_batch_index();
+    build_batch_index(Phi_in);
     allocate_buffers();
 
     if (verbose) std::cout << "Computing initial centroids..." << std::endl;
@@ -176,19 +166,31 @@ Harmony::Harmony(
     harmonize(max_iter_harmony, verbose);
 }
 
-void Harmony::build_batch_index() {
-    VECTYPE sizes = VECTYPE(arma::sum(Phi, 1));
+void Harmony::build_batch_index(const arma::sp_mat& Phi_in) {
+    // Build batch_index, batch_sizes, and cell_to_batch from sparse Phi
+    // After this, the sparse matrix is no longer needed
+    arma::vec sizes_d = arma::vec(arma::sum(Phi_in, 1));
+    batch_sizes = arma::conv_to<VECTYPE>::from(sizes_d);
+
     std::vector<unsigned> counters(B, 0);
     batch_index.resize(B);
     for (int b = 0; b < B; ++b) {
-        batch_index[b].zeros(static_cast<unsigned>(sizes(b)));
+        batch_index[b].zeros(static_cast<unsigned>(batch_sizes(b)));
     }
-    typename SPMAT::const_iterator it = Phi.begin();
-    typename SPMAT::const_iterator it_end = Phi.end();
+    typename arma::sp_mat::const_iterator it = Phi_in.begin();
+    typename arma::sp_mat::const_iterator it_end = Phi_in.end();
     for (; it != it_end; ++it) {
         unsigned row_idx = it.row();
         unsigned col_idx = it.col();
         batch_index[row_idx](counters[row_idx]++) = col_idx;
+    }
+
+    // Cell-to-batch reverse lookup
+    cell_to_batch.resize(N);
+    for (int b = 0; b < B; ++b) {
+        for (unsigned i = 0; i < batch_index[b].n_elem; ++i) {
+            cell_to_batch[batch_index[b](i)] = b;
+        }
     }
 }
 
@@ -216,7 +218,11 @@ void Harmony::init_cluster() {
     R.each_row() /= arma::sum(R, 0);
 
     E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
-    O = R * Phi_t;
+    O.zeros();
+    for (int j = 0; j < N; ++j) {
+        int b = cell_to_batch[j];
+        for (int k = 0; k < K; ++k) O(k, b) += R(k, j);
+    }
 
     compute_objective();
     objective_harmony.push_back(objective_kmeans.back());
@@ -225,22 +231,30 @@ void Harmony::init_cluster() {
 void Harmony::compute_objective() {
     const float norm_const = 2000.0f / static_cast<float>(N);
 
-    float kmeans_error = arma::accu(R % dist_mat);
+    // All computed via loops — no K×N temporaries
+    float kmeans_error = 0.0f;
+    float _entropy = 0.0f;
+    for (int k = 0; k < K; ++k) {
+        const float* r_row = R.colptr(0) + k;
+        const float* d_row = dist_mat.colptr(0) + k;
+        float row_kmeans = 0.0f;
+        float row_entropy = 0.0f;
+        for (int j = 0; j < N; ++j) {
+            float r = r_row[j * K];
+            row_kmeans += r * d_row[j * K];
+            if (r > 0) row_entropy += r * std::log(r);
+        }
+        kmeans_error += row_kmeans;
+        _entropy += sigma(k) * row_entropy;
+    }
 
-    // Entropy: sum_k sigma_k * sum_j R[k,j]*log(R[k,j])
-    // Single K×N temporary (xlogy), then sum per-row and dot with sigma
-    MATTYPE xlogx = R;
-    xlogx.transform([](float val) { return val > 0 ? val * std::log(val) : 0.0f; });
-    float _entropy = arma::dot(VECTYPE(arma::sum(xlogx, 1)), sigma);
-
-    // Cross entropy: use O directly instead of K×N matmul
-    // Identity: sum(R*sigma * (theta_log @ Phi)) = sum(sigma * O * theta_log)
+    // Cross entropy: use O (K×B) directly — no K×N matmul
     MATTYPE ratio = (O + E + 1) / (2 * E + 1);
     ratio.transform([](float val) { return std::log(val); });
-    MATTYPE theta_log = arma::repmat(theta.t(), K, 1) % ratio;
-    MATTYPE sigma_O = O;
-    sigma_O.each_col() %= sigma;
-    float _cross_entropy = arma::accu(sigma_O % theta_log);
+    ratio.each_row() %= theta.t();
+    ratio.each_col() %= sigma;
+    ratio %= O;
+    float _cross_entropy = arma::accu(ratio);
 
     objective_kmeans.push_back((kmeans_error + _entropy + _cross_entropy) * norm_const);
     objective_kmeans_dist.push_back(kmeans_error * norm_const);
@@ -280,7 +294,11 @@ void Harmony::cluster() {
         R.transform([](float val) { return std::exp(val); });
         R.each_row() /= arma::sum(R, 0);
         E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
-        O = R * Phi_t;
+        O.zeros();
+    for (int j = 0; j < N; ++j) {
+        int b = cell_to_batch[j];
+        for (int k = 0; k < K; ++k) O(k, b) += R(k, j);
+    }
     }
 
     int rounds = 0;
@@ -302,9 +320,6 @@ void Harmony::cluster() {
 }
 
 void Harmony::update_R() {
-    // Matches R package: shuffle R and dist_mat as references (in-place),
-    // compute softmax from dist_mat per block (no separate _scale_dist buffer)
-
     // Shuffle order
     std::vector<unsigned> indices_vec(N);
     std::iota(indices_vec.begin(), indices_vec.end(), 0);
@@ -312,49 +327,59 @@ void Harmony::update_R() {
     arma::uvec update_order(N);
     for (int i = 0; i < N; ++i) update_order(i) = indices_vec[i];
 
-    arma::uvec indices = arma::linspace<arma::uvec>(0, N - 1, N);
-    arma::uvec reverse_index(N, arma::fill::zeros);
-    reverse_index.elem(update_order) = indices;
+    arma::uvec reverse_index(N);
+    for (int i = 0; i < N; ++i) reverse_index(update_order(i)) = i;
 
     unsigned n_blocks = static_cast<unsigned>(std::ceil(1.0 / block_size));
     unsigned cells_per_block = static_cast<unsigned>(N * block_size);
 
-    // Shuffle R and dist_mat in-place (matches R: "Reference matrices")
+    // Shuffle R and dist_mat in-place
     R = R.cols(update_order);
     dist_mat = dist_mat.cols(update_order);
 
-    // Phi must be copied (sparse, can't shuffle in-place efficiently)
-    SPMAT Phi_randomized(Phi.cols(update_order));
-    SPMAT Phi_t_randomized(Phi_randomized.t());
+    // Shuffled cell-to-batch lookup (no sparse Phi copy needed)
+    std::vector<int> block_batch(N);
+    for (int i = 0; i < N; ++i) block_batch[i] = cell_to_batch[update_order(i)];
 
     for (unsigned i = 0; i < n_blocks; ++i) {
         unsigned idx_min = i * cells_per_block;
         unsigned idx_max = ((i + 1) * cells_per_block) - 1;
         if (i == n_blocks - 1) idx_max = N - 1;
+        unsigned block_n = idx_max - idx_min + 1;
 
         auto Rcells = R.submat(0, idx_min, R.n_rows - 1, idx_max);
-        auto Phicells = Phi_randomized.submat(0, idx_min, Phi_randomized.n_rows - 1, idx_max);
-        auto Phi_tcells = Phi_t_randomized.submat(idx_min, 0, idx_max, Phi_t_randomized.n_cols - 1);
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
 
-        // Step 1: remove cells
+        // Step 1: remove cells from O and E via scatter
         E -= VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
-        O -= Rcells * Phi_tcells;
+        for (unsigned j = 0; j < block_n; ++j) {
+            int b = block_batch[idx_min + j];
+            for (int k = 0; k < K; ++k) O(k, b) -= Rcells(k, j);
+        }
 
-        // Step 2: recompute R from dist_mat (no _scale_dist buffer)
+        // Step 2: recompute R from dist_mat
         Rcells = -dist_matcells;
         Rcells.each_col() /= sigma;
         Rcells.transform([](float val) { return std::exp(val); });
         Rcells = arma::normalise(Rcells, 1, 0);
-        Rcells = Rcells % (harmony_pow((2*E + 1) / (O + E + 1), theta) * Phicells);
+
+        // Apply diversity penalty via cell_to_batch gather (no sparse Phi multiply)
+        MATTYPE diversity_ratio = harmony_pow((2*E + 1) / (O + E + 1), theta);
+        for (unsigned j = 0; j < block_n; ++j) {
+            int b = block_batch[idx_min + j];
+            for (int k = 0; k < K; ++k) Rcells(k, j) *= diversity_ratio(k, b);
+        }
         Rcells = arma::normalise(Rcells, 1, 0);
 
-        // Step 3: put cells back
+        // Step 3: put cells back into O and E
         E += VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
-        O += Rcells * Phi_tcells;
+        for (unsigned j = 0; j < block_n; ++j) {
+            int b = block_batch[idx_min + j];
+            for (int k = 0; k < K; ++k) O(k, b) += Rcells(k, j);
+        }
     }
 
-    // Unshuffle (in-place, matches R)
+    // Unshuffle
     R = R.cols(reverse_index);
     dist_mat = dist_mat.cols(reverse_index);
 }
@@ -386,10 +411,8 @@ void Harmony::moe_correct_ridge() {
     // Reset Z_corr to Z_orig (matches R)
     Z_corr = Z_orig;
 
-    VECTYPE sizes = VECTYPE(arma::sum(Phi, 1));
-
     for (int k = 0; k < K; ++k) {
-        VECTYPE avg_R = O.row(k).t() / sizes;
+        VECTYPE avg_R = O.row(k).t() / batch_sizes;
 
         // Determine which batches qualify
         std::vector<unsigned> keep;

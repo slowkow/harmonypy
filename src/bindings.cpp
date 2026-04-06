@@ -7,6 +7,7 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/vector.h>
 #include "harmony.hpp"
+#include "lisi.hpp"
 
 namespace nb = nanobind;
 using namespace harmony;
@@ -199,4 +200,34 @@ NB_MODULE(_harmony_cpp, m) {
                       "K-means objective values")
         .def_prop_ro("kmeans_rounds", &HarmonyWrapper::kmeans_rounds,
                       "Number of k-means rounds per harmony iteration");
+
+    // LISI function
+    using NpDouble2D_RO = nb::ndarray<double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+    using NpInt32_1D_RO = nb::ndarray<int, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+
+    m.def("compute_lisi_cpp",
+        [](NpDouble2D_RO X, NpInt32_1D_RO labels, int n_categories, double perplexity)
+            -> nb::ndarray<nb::numpy, double, nb::ndim<1>> {
+            size_t N = X.shape(0), d = X.shape(1);
+            const double* x_ptr = X.data();
+            // Convert row-major numpy to arma::mat (col-major)
+            arma::mat X_arma(N, d);
+            for (size_t i = 0; i < N; ++i)
+                for (size_t j = 0; j < d; ++j)
+                    X_arma(i, j) = x_ptr[i * d + j];
+
+            arma::vec result = lisi::compute_lisi_impl(
+                X_arma, labels.data(), n_categories, perplexity
+            );
+
+            double* out = new double[N];
+            std::memcpy(out, result.memptr(), N * sizeof(double));
+            nb::capsule owner(out, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+            size_t shape[1] = { N };
+            return nb::ndarray<nb::numpy, double, nb::ndim<1>>(out, 1, shape, std::move(owner));
+        },
+        nb::arg("X"), nb::arg("labels"), nb::arg("n_categories"), nb::arg("perplexity"),
+        nb::rv_policy::move,
+        "Compute LISI for one label column. Returns N-length array of LISI values."
+    );
 }

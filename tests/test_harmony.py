@@ -1,4 +1,4 @@
-# Test harmonypy with PyTorch implementation
+# Test harmonypy
 """
 Run just the small test (good for Github actions):
 
@@ -72,7 +72,7 @@ def test_random_seed():
 
 def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n" + "=" * 60)
-    print("TEST: test_run_harmony (PyTorch)")
+    print("TEST: test_run_harmony")
     print("=" * 60)
 
     if not os.path.exists(meta_tsv):
@@ -153,19 +153,9 @@ def download_data():
 
 
 if __name__ == "__main__":
-    import torch
     print("\n" + "#" * 60)
-    print("# Running harmonypy tests (PyTorch implementation)")
+    print("# Running harmonypy tests")
     print("#" * 60)
-    
-    # Show PyTorch device info
-    print(f"\nPyTorch version: {torch.__version__}")
-    if torch.cuda.is_available():
-        print(f"CUDA available: {torch.cuda.get_device_name(0)}")
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        print("MPS (Apple Silicon) available")
-    else:
-        print("Using CPU")
     print()
     
     timings = {}

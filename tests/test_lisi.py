@@ -14,7 +14,8 @@ def test_lisi():
     lisi_test = pd.read_csv("data/lisi_lisi.tsv.gz", sep="\t")
     lisi_test = lisi_test.iloc[:,-2:].to_numpy()
 
-    assert np.allclose(lisi, lisi_test)
+    # Tolerance accounts for differences between kd-tree implementations
+    assert np.allclose(lisi, lisi_test, atol=0.01)
 
 # def timereps(reps, func):
 #     from time import time

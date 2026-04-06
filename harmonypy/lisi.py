@@ -17,8 +17,8 @@
 
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
 from typing import Iterable
+from harmonypy._harmony_cpp import compute_lisi_cpp
 
 
 def compute_lisi(
@@ -41,7 +41,7 @@ def compute_lisi(
 
         - If LISI is approximately equal to 1, then the item is surrounded by
           neighbors from 1 category.
-    
+
     The LISI statistic is useful to evaluate whether multiple datasets are
     well-integrated by algorithms such as Harmony [1].
 
@@ -49,86 +49,11 @@ def compute_lisi(
     """
     n_cells = metadata.shape[0]
     n_labels = len(label_colnames)
-    # We need at least 3 * n_neigbhors to compute the perplexity
-    knn = NearestNeighbors(n_neighbors = perplexity * 3, algorithm = 'kd_tree').fit(X)
-    distances, indices = knn.kneighbors(X)
-    # Don't count yourself
-    indices = indices[:,1:]
-    distances = distances[:,1:]
-    # Save the result
+    X_arr = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
     lisi_df = np.zeros((n_cells, n_labels))
     for i, label in enumerate(label_colnames):
         labels = pd.Categorical(metadata[label])
         n_categories = len(labels.categories)
-        simpson = compute_simpson(distances.T, indices.T, labels, n_categories, perplexity)
-        lisi_df[:,i] = 1 / simpson
+        codes = labels.codes.astype(np.int32)
+        lisi_df[:, i] = compute_lisi_cpp(X_arr, codes, n_categories, perplexity)
     return lisi_df
-
-
-def compute_simpson(
-    distances: np.ndarray,
-    indices: np.ndarray,
-    labels: pd.Categorical,
-    n_categories: int,
-    perplexity: float,
-    tol: float=1e-5
-):
-    n = distances.shape[1]
-    P = np.zeros(distances.shape[0])
-    simpson = np.zeros(n)
-    logU = np.log(perplexity)
-    # Loop through each cell.
-    for i in range(n):
-        beta = 1
-        betamin = -np.inf
-        betamax = np.inf
-        # Compute Hdiff
-        P = np.exp(-distances[:,i] * beta)
-        P_sum = np.sum(P)
-        if P_sum == 0:
-            H = 0
-            P = np.zeros(distances.shape[0])
-        else:
-            H = np.log(P_sum) + beta * np.sum(distances[:,i] * P) / P_sum
-            P = P / P_sum
-        Hdiff = H - logU
-        n_tries = 50
-        for t in range(n_tries):
-            # Stop when we reach the tolerance
-            if abs(Hdiff) < tol:
-                break
-            # Update beta
-            if Hdiff > 0:
-                betamin = beta
-                if not np.isfinite(betamax):
-                    beta *= 2
-                else:
-                    beta = (beta + betamax) / 2
-            else:
-                betamax = beta
-                if not np.isfinite(betamin):
-                    beta /= 2
-                else:
-                    beta = (beta + betamin) / 2
-            # Compute Hdiff
-            P = np.exp(-distances[:,i] * beta)
-            P_sum = np.sum(P)
-            if P_sum == 0:
-                H = 0
-                P = np.zeros(distances.shape[0])
-            else:
-                H = np.log(P_sum) + beta * np.sum(distances[:,i] * P) / P_sum
-                P = P / P_sum
-            Hdiff = H - logU
-        # distancesefault value
-        if H == 0:
-            simpson[i] = -1
-        # Simpson's index
-        for label_category in labels.categories:
-            ix = indices[:,i]
-            q = labels[ix] == label_category
-            if np.any(q):
-                P_sum = np.sum(P[q])
-                simpson[i] += P_sum * P_sum
-    return simpson
-

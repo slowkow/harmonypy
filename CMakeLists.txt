@@ -8,11 +8,29 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Optimization flags
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
-# Find packages
+# Find Python and nanobind
 find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module
     OPTIONAL_COMPONENTS Development.SABIModule)
 find_package(nanobind CONFIG REQUIRED)
-find_package(Armadillo REQUIRED)
+
+# --- Armadillo: header-only mode ---
+# Try system Armadillo first (for local development),
+# fall back to FetchContent (for wheel builds)
+find_package(Armadillo QUIET)
+if(ARMADILLO_FOUND)
+    message(STATUS "Using system Armadillo ${ARMADILLO_VERSION}")
+    set(ARMADILLO_INCLUDE ${ARMADILLO_INCLUDE_DIRS})
+else()
+    message(STATUS "System Armadillo not found, fetching headers...")
+    include(FetchContent)
+    FetchContent_Declare(
+        armadillo
+        URL https://sourceforge.net/projects/arma/files/armadillo-14.2.2.tar.xz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(armadillo)
+    set(ARMADILLO_INCLUDE ${armadillo_SOURCE_DIR}/include)
+endif()
 
 # OpenMP support (disabled on macOS to avoid libomp conflicts)
 if(NOT APPLE)
@@ -26,14 +44,32 @@ nanobind_add_module(_harmony_cpp
     src/bindings.cpp
 )
 
-# Link Armadillo
-target_link_libraries(_harmony_cpp PRIVATE ${ARMADILLO_LIBRARIES})
-target_include_directories(_harmony_cpp PRIVATE ${ARMADILLO_INCLUDE_DIRS})
-
-# Include directories
+# Armadillo in header-only mode: call BLAS/LAPACK directly
+target_compile_definitions(_harmony_cpp PRIVATE ARMA_DONT_USE_WRAPPER)
 target_include_directories(_harmony_cpp PRIVATE
+    ${ARMADILLO_INCLUDE}
     ${CMAKE_SOURCE_DIR}/src
 )
+
+# Link BLAS/LAPACK
+if(APPLE)
+    target_link_libraries(_harmony_cpp PRIVATE "-framework Accelerate")
+else()
+    # Find OpenBLAS (provides both BLAS and LAPACK)
+    find_library(OPENBLAS_LIB openblas
+        PATHS /usr/lib64 /usr/lib /usr/local/lib
+              /usr/lib/x86_64-linux-gnu
+              /usr/lib/aarch64-linux-gnu)
+    if(OPENBLAS_LIB)
+        message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")
+        target_link_libraries(_harmony_cpp PRIVATE ${OPENBLAS_LIB})
+    else()
+        # Fallback: try generic BLAS/LAPACK
+        find_package(BLAS REQUIRED)
+        find_package(LAPACK REQUIRED)
+        target_link_libraries(_harmony_cpp PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+    endif()
+endif()
 
 # Link OpenMP if available
 if(OpenMP_CXX_FOUND)

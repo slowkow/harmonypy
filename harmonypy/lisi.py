@@ -16,14 +16,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import numpy as np
-import pandas as pd
 from typing import Iterable
 from harmonypy._harmony_cpp import compute_lisi_cpp
 
 
 def compute_lisi(
-    X: np.array,
-    metadata: pd.DataFrame,
+    X: np.ndarray,
+    metadata,
     label_colnames: Iterable[str],
     perplexity: float=30
 ):
@@ -47,13 +46,13 @@ def compute_lisi(
 
     [1]: Korsunsky et al. 2019 doi: 10.1038/s41592-019-0619-0
     """
-    n_cells = metadata.shape[0]
+    n_cells = np.asarray(X).shape[0]
     n_labels = len(label_colnames)
     X_arr = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
     lisi_df = np.zeros((n_cells, n_labels))
     for i, label in enumerate(label_colnames):
-        labels = pd.Categorical(metadata[label])
-        n_categories = len(labels.categories)
-        codes = labels.codes.astype(np.int32)
-        lisi_df[:, i] = compute_lisi_cpp(X_arr, codes, n_categories, perplexity)
+        col = np.asarray(metadata[label])
+        uniques, codes = np.unique(col, return_inverse=True)
+        n_categories = len(uniques)
+        lisi_df[:, i] = compute_lisi_cpp(X_arr, codes.astype(np.int32), n_categories, perplexity)
     return lisi_df

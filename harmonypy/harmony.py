@@ -16,7 +16,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
-import pandas as pd
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
 
@@ -41,7 +40,7 @@ if not logger.handlers:
 
 def run_harmony(
     data_mat: np.ndarray,
-    meta_data: pd.DataFrame,
+    meta_data,
     vars_use,
     theta=None,
     lamb=None,
@@ -64,8 +63,10 @@ def run_harmony(
     ----------
     data_mat : np.ndarray
         PCA embedding matrix (cells x PCs or PCs x cells)
-    meta_data : pd.DataFrame
-        Metadata with batch variables (cells x variables)
+    meta_data : dict-like
+        Metadata with batch variables (cells x variables).
+        Accepts pandas DataFrame, dict of arrays, or any object
+        supporting ``meta_data[var]`` column access and ``.shape[0]``.
     vars_use : str or list
         Column name(s) in meta_data to use for batch correction
     theta : float or list, optional
@@ -103,7 +104,12 @@ def run_harmony(
     Harmony
         Harmony object with corrected data in Z_corr attribute.
     """
-    N = meta_data.shape[0]
+    if hasattr(meta_data, 'shape'):
+        N = meta_data.shape[0]
+    else:
+        # dict-like: get length from first column
+        first_key = vars_use[0] if isinstance(vars_use, list) else vars_use
+        N = len(meta_data[first_key])
     if data_mat.shape[1] != N:
         data_mat = data_mat.T
 
@@ -125,7 +131,7 @@ def run_harmony(
     phi_n = np.empty(len(vars_use), dtype=int)
     offset = 0
     for c, var in enumerate(vars_use):
-        codes, uniques = pd.factorize(meta_data[var])
+        uniques, codes = np.unique(np.asarray(meta_data[var]), return_inverse=True)
         n_levels = len(uniques)
         batch_of_cell[c] = codes + offset
         phi_n[c] = n_levels

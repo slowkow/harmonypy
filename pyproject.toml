@@ -23,7 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    "pandas",
 ]
 
 [project.optional-dependencies]

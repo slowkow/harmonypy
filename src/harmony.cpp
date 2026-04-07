@@ -39,8 +39,10 @@ MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
         #endif
         for (int i = 0; i < N; ++i) {
             if (!chosen[i]) {
-                auto diff = data.row(i) - centroids.row(k-1);
-                float dist = arma::dot(diff, diff);
+                // Materialize the row difference to avoid expression template
+                // issues with arma::dot and Accelerate BLAS on macOS
+                VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(k-1));
+                float dist = arma::dot(diff_vec, diff_vec);
                 min_distances(i) = std::min(min_distances(i), dist);
             }
         }
@@ -69,8 +71,9 @@ MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
             float min_dist = std::numeric_limits<float>::max();
             int best_k = 0;
             for (int kk = 0; kk < K; ++kk) {
-                auto diff = data.row(i) - centroids.row(kk);
-                float dist = arma::dot(diff, diff);
+                // Materialize to avoid expression template + BLAS crash
+                VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(kk));
+                float dist = arma::dot(diff_vec, diff_vec);
                 if (dist < min_dist) { min_dist = dist; best_k = kk; }
             }
             assignments[i] = best_k;
@@ -331,7 +334,7 @@ void Harmony::update_R() {
     for (int i = 0; i < N; ++i) reverse_index(update_order(i)) = i;
 
     unsigned n_blocks = static_cast<unsigned>(std::ceil(1.0 / block_size));
-    unsigned cells_per_block = static_cast<unsigned>(N * block_size);
+    unsigned cells_per_block = std::max(1u, static_cast<unsigned>(N * block_size));
 
     // Shuffle R and dist_mat in-place
     R = R.cols(update_order);
@@ -345,6 +348,7 @@ void Harmony::update_R() {
         unsigned idx_min = i * cells_per_block;
         unsigned idx_max = ((i + 1) * cells_per_block) - 1;
         if (i == n_blocks - 1) idx_max = N - 1;
+        if (idx_min >= static_cast<unsigned>(N)) break;
         unsigned block_n = idx_max - idx_min + 1;
 
         auto Rcells = R.submat(0, idx_min, R.n_rows - 1, idx_max);

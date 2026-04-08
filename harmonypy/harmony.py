@@ -104,17 +104,27 @@ def run_harmony(
     Harmony
         Harmony object with corrected data in Z_corr attribute.
     """
+    # Ensure data_mat is a proper numpy array (drop non-numeric columns)
+    if hasattr(data_mat, 'select_dtypes'):
+        data_mat = data_mat.select_dtypes(include=[np.number]).values
+    elif hasattr(data_mat, 'values'):
+        data_mat = data_mat.values
+
     if hasattr(meta_data, 'shape'):
         N = meta_data.shape[0]
     else:
         # dict-like: get length from first column
         first_key = vars_use[0] if isinstance(vars_use, list) else vars_use
         N = len(meta_data[first_key])
-    if data_mat.shape[1] != N:
+    if data_mat.shape[1] == N:
+        pass
+    elif data_mat.shape[0] == N:
         data_mat = data_mat.T
-
-    assert data_mat.shape[1] == N, \
-       "data_mat and meta_data do not have the same number of cells"
+    else:
+        raise ValueError(
+            f"data_mat has shape {data_mat.shape}, but meta_data has {N} cells. "
+            f"One dimension of data_mat must match the number of cells."
+        )
 
     if nclust is None:
         nclust = int(min(round(N / 30.0), 100))
@@ -193,10 +203,6 @@ def run_harmony(
         logger.info(f"    random_state: {random_state}")
         logger.info(f"  Data: {data_mat.shape[0]} PCs × {N} cells")
         logger.info(f"  Batch variables: {vars_use}")
-
-    # Ensure data_mat is a proper numpy array
-    if hasattr(data_mat, 'values'):
-        data_mat = data_mat.values
 
     # Prepare arrays for C++ backend
     data_f64 = np.ascontiguousarray(data_mat.astype(np.float64))

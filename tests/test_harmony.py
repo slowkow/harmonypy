@@ -81,9 +81,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     # Load input data
     meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
     data_mat = pd.read_csv(pcs_tsv, sep="\t", low_memory=False)
-
-    if data_mat.iloc[:,0].dtype == 'object':
-        data_mat = data_mat.iloc[:, 1:]
+    data_mat = data_mat.select_dtypes(include=[np.number])
 
     print("\n--- Input Data ---")
     print(f"data_mat shape: {data_mat.shape} (cells × PCs)")
@@ -92,7 +90,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
     print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
-    print("\n--- Running Harmony (PyTorch) ---")
+    print("\n--- Running Harmony (C++) ---")
     start = time()
     ho = hm.run_harmony(data_mat, meta_data, [batch_var])
     end = time()
@@ -115,8 +113,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
 
     # Compare to expected results from R
     harm = pd.read_csv(harmonized_tsv, sep="\t")
-    if harm.iloc[:,0].dtype == 'object':
-        harm = harm.iloc[:, 1:]
+    harm = harm.select_dtypes(include=[np.number])
     print("\n--- Comparison with R Results ---")
     print(f"Expected result shape: {harm.shape}")
 

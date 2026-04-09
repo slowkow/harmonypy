@@ -2,21 +2,14 @@
 // Copyright (C) 2018  Ilya Korsunsky
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 //
-// Uses float precision and minimal memory layout to match R package.
-// No separate Z_cos (Z_corr is normalized in-place).
-// No separate _scale_dist (computed inline per block in update_R).
+// Follows the R harmony2 algorithm step-by-step, using sparse Phi
+// matrices for BLAS-accelerated batch operations.
 
 #include "harmony.hpp"
 #include <numeric>
 #include <set>
 
-#ifdef HARMONY_USE_OPENMP
-#include <omp.h>
-#endif
-
 namespace harmony {
-
-constexpr int PARALLEL_THRESHOLD = 50000;
 
 // K-means++ initialization
 MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
@@ -34,20 +27,14 @@ MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
     VECTYPE min_distances(N, arma::fill::value(std::numeric_limits<float>::max()));
 
     for (int k = 1; k < K; ++k) {
-        #ifdef HARMONY_USE_OPENMP
-        #pragma omp parallel for schedule(static) if(N > PARALLEL_THRESHOLD)
-        #endif
         for (int i = 0; i < N; ++i) {
             if (!chosen[i]) {
-                // Materialize the row difference to avoid expression template
-                // issues with arma::dot and Accelerate BLAS on macOS
                 VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(k-1));
                 float dist = arma::dot(diff_vec, diff_vec);
                 min_distances(i) = std::min(min_distances(i), dist);
             }
         }
 
-        // discrete_distribution needs double iterators
         arma::vec min_dist_d = arma::conv_to<arma::vec>::from(min_distances);
         std::discrete_distribution<int> weighted_dist(
             min_dist_d.begin(), min_dist_d.end()
@@ -64,14 +51,10 @@ MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
     // Refine with 25 iterations of k-means
     for (int iter = 0; iter < 25; ++iter) {
         std::vector<int> assignments(N);
-        #ifdef HARMONY_USE_OPENMP
-        #pragma omp parallel for schedule(static) if(N > PARALLEL_THRESHOLD)
-        #endif
         for (int i = 0; i < N; ++i) {
             float min_dist = std::numeric_limits<float>::max();
             int best_k = 0;
             for (int kk = 0; kk < K; ++kk) {
-                // Materialize to avoid expression template + BLAS crash
                 VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(kk));
                 float dist = arma::dot(diff_vec, diff_vec);
                 if (dist < min_dist) { min_dist = dist; best_k = kk; }
@@ -130,10 +113,7 @@ Harmony::Harmony(
     B_vec(B_vec_in),
     rng(random_state)
 {
-    // Convert double inputs to float
     Z_orig = arma::conv_to<MATTYPE>::from(Z);
-
-    // Z_corr = L2-normalized Z_orig (no separate Z_cos — matches R)
     Z_corr = arma::normalise(Z_orig, 2, 0);
 
     Pr_b = arma::conv_to<VECTYPE>::from(Pr_b_in);
@@ -152,15 +132,15 @@ Harmony::Harmony(
         lambda = arma::conv_to<VECTYPE>::from(lambda_in);
     }
 
-    // Covariate bounds
-    covariate_bounds.resize(B_vec.size());
-    unsigned cumsum = 0;
-    for (unsigned i = 0; i < B_vec.size(); ++i) {
-        cumsum += B_vec[i];
-        covariate_bounds[i] = cumsum;
+    // Covariate bounds (matches R: partial_sum)
+    if (B_vec.size() > 1) {
+        covariate_bounds.resize(B_vec.size() - 1);
+        std::partial_sum(B_vec.begin(), B_vec.end(), covariate_bounds.begin());
+    } else {
+        covariate_bounds.push_back(B_vec.front());
     }
 
-    build_batch_index(Phi_in);
+    build_batch_structures(Phi_in);
     allocate_buffers();
 
     if (verbose) std::cout << "Computing initial centroids..." << std::endl;
@@ -169,16 +149,23 @@ Harmony::Harmony(
     harmonize(max_iter_harmony, verbose);
 }
 
-void Harmony::build_batch_index(const arma::sp_mat& Phi_in) {
-    // Build batch_index, batch_sizes, and cell_to_batch from sparse Phi
-    // After this, the sparse matrix is no longer needed
-    arma::vec sizes_d = arma::vec(arma::sum(Phi_in, 1));
-    batch_sizes = arma::conv_to<VECTYPE>::from(sizes_d);
+void Harmony::build_batch_structures(const arma::sp_mat& Phi_in) {
+    // Store sparse Phi (B x N) and its transpose for BLAS operations
+    Phi = arma::conv_to<SPMAT>::from(Phi_in);
+    Phi_t = Phi.t();
 
+    // Build Phi_moe: (B+1) x N with intercept row of ones
+    SPMAT intcpt = arma::zeros<SPMAT>(1, N);
+    intcpt = intcpt + 1;
+    Phi_moe = arma::join_cols(intcpt, Phi);
+    Phi_moe_t = Phi_moe.t();
+
+    // Build per-batch cell index lists (for ridge correction)
+    arma::uvec batch_sizes_u = arma::conv_to<arma::uvec>::from(VECTYPE(arma::sum(Phi, 1)));
     std::vector<unsigned> counters(B, 0);
     batch_index.resize(B);
     for (int b = 0; b < B; ++b) {
-        batch_index[b].zeros(static_cast<unsigned>(batch_sizes(b)));
+        batch_index[b].zeros(batch_sizes_u(b));
     }
     typename arma::sp_mat::const_iterator it = Phi_in.begin();
     typename arma::sp_mat::const_iterator it_end = Phi_in.end();
@@ -187,18 +174,9 @@ void Harmony::build_batch_index(const arma::sp_mat& Phi_in) {
         unsigned col_idx = it.col();
         batch_index[row_idx](counters[row_idx]++) = col_idx;
     }
-
-    // Cell-to-batch reverse lookup
-    cell_to_batch.resize(N);
-    for (int b = 0; b < B; ++b) {
-        for (unsigned i = 0; i < batch_index[b].n_elem; ++i) {
-            cell_to_batch[batch_index[b](i)] = b;
-        }
-    }
 }
 
 void Harmony::allocate_buffers() {
-    // No _scale_dist — computed inline per block (matches R)
     dist_mat.zeros(K, N);
     O.zeros(K, B);
     E.zeros(K, B);
@@ -208,7 +186,7 @@ void Harmony::allocate_buffers() {
 }
 
 void Harmony::init_cluster() {
-    // Z_corr is already L2-normalized from constructor
+    // Matches R: init_cluster_cpp
     MATTYPE centroids = kmeans_plusplus(Z_corr.t(), K, rng);
     Y = centroids.t();
     Y = arma::normalise(Y, 2, 0);
@@ -217,47 +195,34 @@ void Harmony::init_cluster() {
 
     R = -dist_mat;
     R.each_col() /= sigma;
-    R.transform([](float val) { return std::exp(val); });
+    R = arma::exp(R);
     R.each_row() /= arma::sum(R, 0);
 
-    E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
-    O.zeros();
-    for (int j = 0; j < N; ++j) {
-        int b = cell_to_batch[j];
-        for (int k = 0; k < K; ++k) O(k, b) += R(k, j);
-    }
+    // Matches R: E = sum(R,1) * Pr_b.t(); O = R * Phi_t;
+    E = arma::sum(R, 1) * Pr_b.t();
+    O = R * Phi_t;
 
     compute_objective();
     objective_harmony.push_back(objective_kmeans.back());
 }
 
 void Harmony::compute_objective() {
+    // Matches R: compute_objective
     const float norm_const = 2000.0f / static_cast<float>(N);
 
-    // All computed via loops — no K×N temporaries
-    float kmeans_error = 0.0f;
-    float _entropy = 0.0f;
-    for (int k = 0; k < K; ++k) {
-        const float* r_row = R.colptr(0) + k;
-        const float* d_row = dist_mat.colptr(0) + k;
-        float row_kmeans = 0.0f;
-        float row_entropy = 0.0f;
-        for (int j = 0; j < N; ++j) {
-            float r = r_row[j * K];
-            row_kmeans += r * d_row[j * K];
-            if (r > 0) row_entropy += r * std::log(r);
-        }
-        kmeans_error += row_kmeans;
-        _entropy += sigma(k) * row_entropy;
-    }
+    float kmeans_error = arma::accu(R % dist_mat);
 
-    // Cross entropy: use O (K×B) directly — no K×N matmul
+    // Entropy: sum(xlogy(R, R) .* sigma)
+    MATTYPE log_R = R;
+    log_R.transform([](float val) { return val > 0 ? val * std::log(val) : 0.0f; });
+    float _entropy = arma::as_scalar(arma::accu(log_R.each_col() % sigma));
+
+    // Cross entropy: matches R formula exactly
+    // (R .each_col() % sigma) % ((theta_log) * Phi)
     MATTYPE ratio = (O + E + 1) / (2 * E + 1);
     ratio.transform([](float val) { return std::log(val); });
     ratio.each_row() %= theta.t();
-    ratio.each_col() %= sigma;
-    ratio %= O;
-    float _cross_entropy = arma::accu(ratio);
+    float _cross_entropy = arma::accu((R.each_col() % sigma) % (ratio * Phi));
 
     objective_kmeans.push_back((kmeans_error + _entropy + _cross_entropy) * norm_const);
     objective_kmeans_dist.push_back(kmeans_error * norm_const);
@@ -287,21 +252,16 @@ void Harmony::harmonize(int iter_harmony, bool verbose_flag) {
 }
 
 void Harmony::cluster() {
-    // harmony2: cold-start R re-estimation after correction
-    // Z_corr was updated by moe_correct_ridge, re-normalize in-place
+    // Matches R: cluster_cpp
     if (objective_harmony.size() > 1) {
         Z_corr = arma::normalise(Z_corr, 2, 0);
         dist_mat = 2.0f * (1.0f - Y.t() * Z_corr);
         R = -dist_mat;
         R.each_col() /= sigma;
-        R.transform([](float val) { return std::exp(val); });
+        R = arma::exp(R);
         R.each_row() /= arma::sum(R, 0);
-        E = VECTYPE(arma::sum(R, 1)) * Pr_b.t();
-        O.zeros();
-    for (int j = 0; j < N; ++j) {
-        int b = cell_to_batch[j];
-        for (int k = 0; k < K; ++k) O(k, b) += R(k, j);
-    }
+        E = arma::sum(R, 1) * Pr_b.t();
+        O = R * Phi_t;
     }
 
     int rounds = 0;
@@ -323,64 +283,56 @@ void Harmony::cluster() {
 }
 
 void Harmony::update_R() {
-    // Shuffle order
+    // Matches R: update_R — uses sparse Phi for O updates and diversity
+
     std::vector<unsigned> indices_vec(N);
     std::iota(indices_vec.begin(), indices_vec.end(), 0);
     std::shuffle(indices_vec.begin(), indices_vec.end(), rng);
     arma::uvec update_order(N);
     for (int i = 0; i < N; ++i) update_order(i) = indices_vec[i];
 
-    arma::uvec reverse_index(N);
-    for (int i = 0; i < N; ++i) reverse_index(update_order(i)) = i;
+    arma::uvec indices = arma::linspace<arma::uvec>(0, N - 1, N);
+
+    arma::uvec reverse_index(N, arma::fill::zeros);
+    reverse_index.rows(update_order) = indices;
 
     unsigned n_blocks = static_cast<unsigned>(std::ceil(1.0 / block_size));
     unsigned cells_per_block = std::max(1u, static_cast<unsigned>(N * block_size));
 
-    // Shuffle R and dist_mat in-place
+    // Shuffle R, dist_mat, and Phi
     R = R.cols(update_order);
     dist_mat = dist_mat.cols(update_order);
-
-    // Shuffled cell-to-batch lookup (no sparse Phi copy needed)
-    std::vector<int> block_batch(N);
-    for (int i = 0; i < N; ++i) block_batch[i] = cell_to_batch[update_order(i)];
+    SPMAT Phi_rand(Phi.cols(update_order));
+    SPMAT Phi_t_rand(Phi_rand.t());
 
     for (unsigned i = 0; i < n_blocks; ++i) {
         unsigned idx_min = i * cells_per_block;
         unsigned idx_max = ((i + 1) * cells_per_block) - 1;
         if (i == n_blocks - 1) idx_max = N - 1;
         if (idx_min >= static_cast<unsigned>(N)) break;
-        unsigned block_n = idx_max - idx_min + 1;
 
         auto Rcells = R.submat(0, idx_min, R.n_rows - 1, idx_max);
+        auto Phicells = Phi_rand.submat(0, idx_min, Phi_rand.n_rows - 1, idx_max);
+        auto Phi_tcells = Phi_t_rand.submat(idx_min, 0, idx_max, Phi_t_rand.n_cols - 1);
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
 
-        // Step 1: remove cells from O and E via scatter
-        E -= VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
-        for (unsigned j = 0; j < block_n; ++j) {
-            int b = block_batch[idx_min + j];
-            for (int k = 0; k < K; ++k) O(k, b) -= Rcells(k, j);
-        }
+        // Step 1: remove cells (sparse matmul for O)
+        E -= arma::sum(Rcells, 1) * Pr_b.t();
+        O -= Rcells * Phi_tcells;
 
-        // Step 2: recompute R from dist_mat
+        // Step 2: recompute R for this block
         Rcells = -dist_matcells;
         Rcells.each_col() /= sigma;
-        Rcells.transform([](float val) { return std::exp(val); });
+        Rcells = arma::exp(Rcells);
         Rcells = arma::normalise(Rcells, 1, 0);
 
-        // Apply diversity penalty via cell_to_batch gather (no sparse Phi multiply)
-        MATTYPE diversity_ratio = harmony_pow((2*E + 1) / (O + E + 1), theta);
-        for (unsigned j = 0; j < block_n; ++j) {
-            int b = block_batch[idx_min + j];
-            for (int k = 0; k < K; ++k) Rcells(k, j) *= diversity_ratio(k, b);
-        }
+        // Apply diversity penalty (sparse matmul gathers per-cell batch values)
+        Rcells = Rcells % (harmony_pow(((2*E) + 1) / (O + E + 1), theta) * Phicells);
         Rcells = arma::normalise(Rcells, 1, 0);
 
-        // Step 3: put cells back into O and E
-        E += VECTYPE(arma::sum(Rcells, 1)) * Pr_b.t();
-        for (unsigned j = 0; j < block_n; ++j) {
-            int b = block_batch[idx_min + j];
-            for (int k = 0; k < K; ++k) O(k, b) += Rcells(k, j);
-        }
+        // Step 3: put cells back (sparse matmul for O)
+        E += arma::sum(Rcells, 1) * Pr_b.t();
+        O += Rcells * Phi_tcells;
     }
 
     // Unshuffle
@@ -389,6 +341,7 @@ void Harmony::update_R() {
 }
 
 bool Harmony::check_convergence(int i_type) {
+    // Matches R: check_convergence
     if (i_type == 0) {
         if (objective_kmeans.size() <= static_cast<size_t>(window_size + 1))
             return false;
@@ -396,8 +349,8 @@ bool Harmony::check_convergence(int i_type) {
         float obj_old = 0.0f, obj_new = 0.0f;
         size_t n = objective_kmeans.size();
         for (int i = 0; i < window_size; ++i) {
-            obj_old += objective_kmeans[n - window_size - 1 + i];
-            obj_new += objective_kmeans[n - window_size + i];
+            obj_old += objective_kmeans[n - 2 - i];
+            obj_new += objective_kmeans[n - 1 - i];
         }
         return std::abs(obj_old - obj_new) / std::abs(obj_old) < epsilon_kmeans;
     }
@@ -412,21 +365,22 @@ bool Harmony::check_convergence(int i_type) {
 }
 
 void Harmony::moe_correct_ridge() {
-    // Reset Z_corr to Z_orig (matches R)
+    // Matches R: moe_correct_ridge_cpp
     Z_corr = Z_orig;
 
-    for (int k = 0; k < K; ++k) {
-        VECTYPE avg_R = O.row(k).t() / batch_sizes;
+    VECTYPE sizes(arma::sum(Phi, 1));
 
-        // Determine which batches qualify
+    for (int k = 0; k < K; ++k) {
+        VECTYPE avg_R = O.row(k).t() / sizes;
+
+        // Determine which batches qualify (matches R covariate_bounds logic)
         std::vector<unsigned> keep;
         std::vector<unsigned> cov_levels(B_vec.size(), 0);
 
         for (unsigned b = 0, current_cov = 0; b < static_cast<unsigned>(B); ++b) {
-            if (current_cov < covariate_bounds.size() - 1 &&
-                b >= covariate_bounds[current_cov])
+            if (current_cov < covariate_bounds.size() && !(b < covariate_bounds[current_cov]))
                 current_cov++;
-            if (avg_R(b) > batch_proportion_cutoff)
+            if (arma::as_scalar(avg_R.row(b)) > batch_proportion_cutoff)
                 cov_levels[current_cov]++;
         }
 
@@ -436,150 +390,187 @@ void Harmony::moe_correct_ridge() {
         }
 
         for (unsigned b = 0, current_cov = 0; b < static_cast<unsigned>(B); ++b) {
-            if (current_cov < covariate_bounds.size() - 1 &&
-                b >= covariate_bounds[current_cov])
+            if (current_cov < covariate_bounds.size() && !(b < covariate_bounds[current_cov]))
                 current_cov++;
-            if (avg_R(b) > batch_proportion_cutoff && cov_levels[current_cov] > 1)
+            if (arma::as_scalar(avg_R.row(b)) > batch_proportion_cutoff && cov_levels[current_cov] > 1)
                 keep.push_back(b);
         }
 
         if (active_covariates == 0) continue;
 
+        arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
+
+        // Pointers for either full or subset path (matches R's pointer approach)
+        MATTYPE *_Z_corr, *_Z_tmp;
+        SPMAT *_Phi_moe, *_Phi_moe_t, *_lambda_mat, *_Rk;
+        std::vector<arma::uvec>* _index;
+        bool subset_data = false;
+
         if (keep.size() == static_cast<size_t>(B)) {
-            // All batches qualify
-            SPMAT lambda_mat(B + 1, B + 1);
+            // All batches qualify — use full data
+            _Z_corr = &(this->Z_corr);
+            _Z_tmp = new MATTYPE(Z_orig);
+            _Phi_moe = &(this->Phi_moe);
+            _Phi_moe_t = &(this->Phi_moe_t);
+            _Rk = new SPMAT(N, N);
+            _Rk->diag() = R.row(k);
+            _index = &(this->batch_index);
+            _lambda_mat = new SPMAT(B + 1, B + 1);
+
             if (lambda_estimation)
-                lambda_mat.diag() = find_lambda(alpha, VECTYPE(E.row(k).t()));
+                _lambda_mat->diag() = find_lambda(alpha, VECTYPE(E.row(k).t()));
             else
-                lambda_mat.diag() = lambda;
-
-            // Build Phi_cov directly from O[k,:] — no N×N sparse Rk needed
-            VECTYPE Ok = VECTYPE(O.row(k).t());
-            MATTYPE Phi_cov(B + 1, B + 1, arma::fill::zeros);
-            float Ok_sum = arma::accu(Ok);
-            Phi_cov(0, 0) = Ok_sum;
-            for (int b = 0; b < B; ++b) {
-                Phi_cov(0, b + 1) = Ok(b);
-                Phi_cov(b + 1, 0) = Ok(b);
-                Phi_cov(b + 1, b + 1) = Ok(b);
-            }
-            Phi_cov += MATTYPE(lambda_mat);
-
-            MATTYPE inv_cov;
-            if (B_vec.size() > 1) {
-                inv_cov = arma::inv(Phi_cov);
-            } else {
-                // Arrowhead inverse
-                VECTYPE ac = -VECTYPE(Phi_cov.row(0).t());
-                ac(0) = 1;
-                float b0 = Phi_cov(0, 0);
-                VECTYPE b = 1.0f / Phi_cov.diag();
-                b(0) = 0;
-                float u = b0 - arma::accu(arma::square(ac) % b);
-                VECTYPE ac_b = ac % b;
-                ac_b(0) = 1;
-                inv_cov = (1.0f/u) * (ac_b * ac_b.t());
-                inv_cov.diag() += b;
-            }
-
-            // Compute W via per-batch matrix-vector products (no d×N Z_tmp)
-            VECTYPE Rk = VECTYPE(R.row(k).t());
-            std::vector<VECTYPE> z_sums(B);
-            VECTYPE z_sum_all(d, arma::fill::zeros);
-            for (int b = 0; b < B; ++b) {
-                z_sums[b] = Z_orig.cols(batch_index[b]) * Rk.rows(batch_index[b]);
-                z_sum_all += z_sums[b];
-            }
-
-            W = inv_cov.col(0) * z_sum_all.t();
-            for (int b = 0; b < B; ++b) {
-                W += inv_cov.col(b + 1) * z_sums[b].t();
-            }
-
-            Y.col(k) = W.row(0).t();
-            W.row(0).zeros();
-
-            // Batch-wise correction (no d×N product, no N×N Rk)
-            for (int b = 0; b < B; ++b) {
-                Z_corr.cols(batch_index[b]) -= W.row(b + 1).t() * Rk.rows(batch_index[b]).t();
-            }
-
+                _lambda_mat->diag() = lambda;
         } else {
             // Subset to qualifying batches
-            unsigned n_keep = keep.size();
+            subset_data = true;
 
-            // Lambda for subsetted batches
-            SPMAT lambda_mat(n_keep + 1, n_keep + 1);
+            // Collect qualifying cell indices
+            std::vector<unsigned> keep_cols_scratch;
+            keep_cols_scratch.reserve(N);
+            for (auto b : keep) {
+                keep_cols_scratch.insert(keep_cols_scratch.end(),
+                    batch_index[b].memptr(), batch_index[b].memptr() + batch_index[b].n_rows);
+            }
+
+            std::set<unsigned> keep_cols_set(keep_cols_scratch.begin(), keep_cols_scratch.end());
+            arma::uvec keep_cols = arma::conv_to<arma::uvec>::from(
+                std::vector<unsigned>(keep_cols_set.begin(), keep_cols_set.end()));
+
+            // Map old cell indices to new contiguous indices
+            std::vector<int> cell_map(N, -1);
+            unsigned idx = 0;
+            for (auto c : keep_cols_set) cell_map[c] = idx++;
+
+            unsigned n_keep = keep.size();
+            unsigned n_cells = keep_cols.n_elem;
+            unsigned PhiNonZero = n_cells + keep_cols_scratch.size();
+
+            // Build new sparse Phi_moe_t
+            arma::uvec rowind_new(PhiNonZero);
+            arma::uvec indptr_new(n_keep + 2);
+            rowind_new.subvec(0, n_cells - 1) = arma::linspace<arma::uvec>(0, n_cells - 1, n_cells);
+            indptr_new[0] = 0;
+            indptr_new[1] = n_cells;
+
+            const arma::uword* rowind_old = Phi_moe_t.row_indices;
+            const arma::uword* indptr_old = Phi_moe_t.col_ptrs;
+
+            _index = new std::vector<arma::uvec>();
+            for (unsigned i = 0; i < n_keep; ++i) {
+                unsigned batch_id = keep[i];
+                unsigned cell_offset = 0;
+                unsigned max_idx = indptr_old[batch_id + 2], min_idx = indptr_old[batch_id + 1];
+                unsigned base_range = indptr_new(i + 1);
+
+                for (unsigned j = min_idx; j < max_idx; ++j) {
+                    int new_index = cell_map[rowind_old[j]];
+                    if (new_index >= 0) {
+                        rowind_new(base_range + cell_offset++) = new_index;
+                    }
+                }
+                indptr_new(i + 2) = base_range + cell_offset;
+                _index->push_back(rowind_new.subvec(base_range, indptr_new(i + 2) - 1));
+            }
+
+            _Z_corr = new MATTYPE(this->Z_corr.cols(keep_cols));
+            _Z_tmp = new MATTYPE(this->Z_orig.cols(keep_cols));
+
+            _Phi_moe_t = new SPMAT(rowind_new, indptr_new,
+                VECTYPE(rowind_new.n_elem, arma::fill::ones),
+                n_cells, n_keep + 1);
+            _Phi_moe = new SPMAT(_Phi_moe_t->t());
+
+            _Rk = new SPMAT(n_cells, n_cells);
+            VECTYPE _Rvec(R.row(k).as_col());
+            _Rk->diag() = _Rvec.rows(keep_cols);
+
+            _lambda_mat = new SPMAT(n_keep + 1, n_keep + 1);
             if (lambda_estimation) {
-                arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
-                VECTYPE E_sub = VECTYPE(E.row(k).t());
-                E_sub = E_sub.rows(keep_batch);
-                lambda_mat.diag() = find_lambda(alpha, E_sub);
+                VECTYPE Esub = VECTYPE(E.row(k).t());
+                Esub = Esub.rows(keep_batch);
+                _lambda_mat->diag() = find_lambda(alpha, Esub);
             } else {
                 VECTYPE ltmp(n_keep + 1);
                 ltmp(0) = 0;
-                arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
                 ltmp.subvec(1, n_keep) = lambda.rows(keep_batch + 1);
-                lambda_mat.diag() = ltmp;
-            }
-
-            // Build cov_mat directly from O[k, keep]
-            VECTYPE Ok_sub(n_keep);
-            for (unsigned i = 0; i < n_keep; ++i) Ok_sub(i) = O(k, keep[i]);
-            MATTYPE cov_mat(n_keep + 1, n_keep + 1, arma::fill::zeros);
-            float Ok_sub_sum = arma::accu(Ok_sub);
-            cov_mat(0, 0) = Ok_sub_sum;
-            for (unsigned i = 0; i < n_keep; ++i) {
-                cov_mat(0, i + 1) = Ok_sub(i);
-                cov_mat(i + 1, 0) = Ok_sub(i);
-                cov_mat(i + 1, i + 1) = Ok_sub(i);
-            }
-            cov_mat += MATTYPE(lambda_mat);
-
-            MATTYPE inv_cov;
-            if (B_vec.size() > 1)
-                inv_cov = arma::inv(cov_mat);
-            else {
-                VECTYPE ac = -VECTYPE(cov_mat.row(0).t());
-                ac(0) = 1;
-                float b0 = cov_mat(0, 0);
-                VECTYPE b = 1.0f / cov_mat.diag();
-                b(0) = 0;
-                float u = b0 - arma::accu(arma::square(ac) % b);
-                VECTYPE ac_b = ac % b;
-                ac_b(0) = 1;
-                inv_cov = (1.0f/u) * (ac_b * ac_b.t());
-                inv_cov.diag() += b;
-            }
-
-            // Compute W via per-batch matrix-vector products
-            VECTYPE Rk = VECTYPE(R.row(k).t());
-            std::vector<VECTYPE> z_sums(n_keep);
-            VECTYPE z_sum_all(d, arma::fill::zeros);
-            for (unsigned i = 0; i < n_keep; ++i) {
-                unsigned b = keep[i];
-                z_sums[i] = Z_orig.cols(batch_index[b]) * Rk.rows(batch_index[b]);
-                z_sum_all += z_sums[i];
-            }
-
-            MATTYPE W_sub = inv_cov.col(0) * z_sum_all.t();
-            for (unsigned i = 0; i < n_keep; ++i) {
-                W_sub += inv_cov.col(i + 1) * z_sums[i].t();
-            }
-
-            Y.col(k) = W_sub.row(0).t();
-            W_sub.row(0).zeros();
-
-            // Batch-wise correction
-            for (unsigned i = 0; i < n_keep; ++i) {
-                unsigned b = keep[i];
-                Z_corr.cols(batch_index[b]) -= W_sub.row(i + 1).t() * Rk.rows(batch_index[b]).t();
+                _lambda_mat->diag() = ltmp;
             }
         }
+
+        // References for cleaner code
+        MATTYPE& Zc = *_Z_corr;
+        SPMAT& Pm = *_Phi_moe;
+        SPMAT& Pmt = *_Phi_moe_t;
+        SPMAT& lam = *_lambda_mat;
+        SPMAT& Rk = *_Rk;
+        MATTYPE& Zt = *_Z_tmp;
+        std::vector<arma::uvec>& idx = *_index;
+
+        // Phi_Rk = Phi_moe * Rk  (sparse matmul)
+        SPMAT Phi_Rk = Pm * Rk;
+
+        // Phi_cov = Phi_Rk * Phi_moe_t + lambda
+        MATTYPE Phi_cov = MATTYPE(Phi_Rk * Pmt) + MATTYPE(lam);
+
+        // Invert covariance
+        MATTYPE inv_cov;
+        if (B_vec.size() > 1) {
+            inv_cov = arma::inv(Phi_cov);
+        } else {
+            // Arrowhead inverse (matches R)
+            VECTYPE ac = -Phi_cov.row(0).as_col();
+            ac(0) = 1;
+            float b0 = Phi_cov(0, 0);
+            VECTYPE b = 1.0f / Phi_cov.diag();
+            b(0) = 0;
+            float u = b0 - arma::accu(arma::square(ac) % b);
+            VECTYPE ac_b = ac % b;
+            ac_b(0) = 1;
+            inv_cov = (1.0f / u) * (ac_b * ac_b.t());
+            inv_cov.diag() += b;
+        }
+
+        // Pre-scale Z_tmp by Rk (matches R: Z_tmp.each_row() % Rk.diag())
+        Zt = Zt.each_row() % VECTYPE(Rk.diag()).as_row();
+
+        // W = inv_cov[:,0] * sum(Z_tmp)' (intercept contribution)
+        W = inv_cov.unsafe_col(0) * arma::sum(Zt, 1).t();
+
+        // Per-batch contribution
+        for (unsigned b = 0; b < idx.size(); ++b) {
+            W += inv_cov.unsafe_col(b + 1) * arma::sum(Zt.cols(idx[b]), 1).t();
+        }
+
+        Y.col(k) = W.row(0).t();
+        W.row(0).zeros();
+
+        // Apply correction: Z_corr -= W' * Phi_Rk (single sparse matmul)
+        Zc -= W.t() * Phi_Rk;
+
+        if (subset_data) {
+            // Write corrected subset back to full Z_corr
+            std::set<unsigned> keep_cols_set;
+            for (auto b : keep) {
+                keep_cols_set.insert(batch_index[b].memptr(),
+                    batch_index[b].memptr() + batch_index[b].n_rows);
+            }
+            arma::uvec keep_cols = arma::conv_to<arma::uvec>::from(
+                std::vector<unsigned>(keep_cols_set.begin(), keep_cols_set.end()));
+            this->Z_corr.cols(keep_cols) = Zc;
+
+            delete _Z_corr;
+            delete _Phi_moe;
+            delete _Phi_moe_t;
+            delete _index;
+        }
+
+        delete _lambda_mat;
+        delete _Rk;
+        delete _Z_tmp;
     }
 
     Y = arma::normalise(Y, 2, 0);
-    // Z_corr will be re-normalized at the start of the next cluster() call
 }
 
 } // namespace harmony

@@ -43,11 +43,13 @@ public:
     MATTYPE Z_orig;
     MATTYPE Z_corr;  // L2-normalized in-place; also holds corrected data
 
-    // Batch structure (no dense or sparse B×N matrices)
+    // Batch structure — sparse matrices for BLAS-accelerated operations
+    SPMAT Phi;           // B x N batch indicator (sparse)
+    SPMAT Phi_t;         // N x B (transpose)
+    SPMAT Phi_moe;       // (B+1) x N — Phi with intercept row
+    SPMAT Phi_moe_t;     // N x (B+1)
     VECTYPE Pr_b;
-    VECTYPE batch_sizes;              // B: number of cells per batch
     std::vector<arma::uvec> batch_index;  // B vectors of cell indices
-    std::vector<int> cell_to_batch;   // N entries: cell j -> batch index
 
     MATTYPE Y;           // d x K centroids
     MATTYPE R;           // K x N soft assignments
@@ -122,7 +124,7 @@ public:
 
 private:
     void allocate_buffers();
-    void build_batch_index(const arma::sp_mat& Phi_in);
+    void build_batch_structures(const arma::sp_mat& Phi_in);
 };
 
 } // namespace harmony

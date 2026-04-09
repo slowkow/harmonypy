@@ -103,7 +103,8 @@ public:
         const std::vector<int>& B_vec,
         double batch_proportion_cutoff,
         bool verbose,
-        int random_state
+        int random_state,
+        int ncores
     );
 
     // Return as double for numpy

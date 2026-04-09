@@ -9,6 +9,10 @@
 #include <numeric>
 #include <set>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace harmony {
 
 // K-means initialization (matches R harmony2: initialize_centroids + arma::kmeans)
@@ -80,7 +84,8 @@ Harmony::Harmony(
     const std::vector<int>& B_vec_in,
     double batch_proportion_cutoff,
     bool verbose,
-    int random_state
+    int random_state,
+    int ncores
 ) : max_iter_harmony(max_iter_harmony),
     max_iter_kmeans(max_iter_kmeans),
     epsilon_kmeans(static_cast<float>(epsilon_kmeans)),
@@ -94,6 +99,16 @@ Harmony::Harmony(
     B_vec(B_vec_in),
     rng(random_state)
 {
+    // Set OpenMP/BLAS thread count (matches R's ncores parameter).
+    // On Linux, OpenBLAS respects omp_set_num_threads for parallel BLAS.
+    // On macOS, OpenMP is disabled in CMakeLists.txt (Accelerate is not
+    // thread-safe with it), so this block is compiled out — harmless.
+#ifdef _OPENMP
+    omp_set_num_threads(ncores);
+#else
+    (void)ncores;  // suppress unused warning when OpenMP is unavailable
+#endif
+
     Z_orig = arma::conv_to<MATTYPE>::from(Z);
     Z_corr = arma::normalise(Z_orig, 2, 0);
 

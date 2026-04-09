@@ -56,6 +56,7 @@ def run_harmony(
     batch_prop_cutoff=1e-5,
     verbose=True,
     random_state=0,
+    ncores=1,
 ):
     """Run Harmony batch effect correction.
 
@@ -98,6 +99,10 @@ def run_harmony(
         Print progress messages. Default is True.
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
+    ncores : int, optional
+        Number of threads for BLAS/OpenMP math operations. Default is 1.
+        Values > 1 enable parallel linear algebra on Linux (via OpenBLAS).
+        Has no effect on macOS (Accelerate is not thread-safe with OpenMP).
 
     Returns
     -------
@@ -231,7 +236,8 @@ def run_harmony(
         phi_n.tolist(),
         float(batch_prop_cutoff),
         verbose,
-        random_state if random_state is not None else 0
+        random_state if random_state is not None else 0,
+        ncores
     )
     return Harmony(cpp_harmony)
 

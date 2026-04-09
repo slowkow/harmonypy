@@ -15,8 +15,38 @@ from time import time
 
 
 def get_rss_gb():
-    """Return current RSS in GB."""
-    if sys.platform == "linux":
+    """Return current RSS in GB (not peak).
+
+    Uses mach_task_basic_info on macOS and /proc/self/status on Linux.
+    """
+    if sys.platform == "darwin":
+        import ctypes, ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c"))
+
+        MACH_TASK_BASIC_INFO = 20
+        class mach_task_basic_info(ctypes.Structure):
+            _fields_ = [
+                ("virtual_size", ctypes.c_uint64),
+                ("resident_size", ctypes.c_uint64),
+                ("resident_size_max", ctypes.c_uint64),
+                ("user_time_seconds", ctypes.c_uint32),
+                ("user_time_microseconds", ctypes.c_uint32),
+                ("system_time_seconds", ctypes.c_uint32),
+                ("system_time_microseconds", ctypes.c_uint32),
+                ("policy", ctypes.c_int32),
+                ("suspend_count", ctypes.c_int32),
+            ]
+
+        info = mach_task_basic_info()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // 4)
+        libc.task_info(
+            libc.mach_task_self(),
+            MACH_TASK_BASIC_INFO,
+            ctypes.byref(info),
+            ctypes.byref(count),
+        )
+        return info.resident_size / 1e9
+    elif sys.platform == "linux":
         with open("/proc/self/status") as f:
             for line in f:
                 if line.startswith("VmRSS:"):

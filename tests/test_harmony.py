@@ -76,7 +76,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("=" * 60)
 
     if not os.path.exists(meta_tsv):
-        return 0
+        return {"time": 0, "peak_python_mb": 0, "rss_delta_mb": 0}
 
     # Load input data
     meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
@@ -90,11 +90,24 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
     print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
-    print("\n--- Running Harmony (C++) ---")
+    print("\n--- Running Harmony ---")
+    import tracemalloc, resource
+    tracemalloc.start()
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     start = time()
     ho = hm.run_harmony(data_mat, meta_data, [batch_var])
     end = time()
+    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    _, peak_python = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    # ru_maxrss is in bytes on macOS, kilobytes on Linux
+    import sys
+    rss_scale = 1 if sys.platform == "linux" else 1024
+    rss_delta_mb = (rss_after - rss_before) / rss_scale / 1024 / 1024
+    peak_python_mb = peak_python / 1024 / 1024
     print(f"\n✓ Harmony completed in {end - start:.2f} seconds")
+    print(f"  Peak Python memory: {peak_python_mb:.1f} MB")
+    print(f"  RSS increase: {rss_delta_mb:.1f} MB")
 
     print("\n--- Harmony Object Info ---")
     print(f"Number of clusters (K): {ho.K}")
@@ -130,7 +143,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     assert np.all(np.array(cors_values) >= 0.9), f"Some correlations < 0.9: {cors_values}"
     print("✓ All correlations >= 0.9 (PASSED)")
     
-    return end - start
+    return {"time": end - start, "peak_python_mb": peak_python_mb, "rss_delta_mb": rss_delta_mb}
 
 
 def download_data():
@@ -185,10 +198,14 @@ if __name__ == "__main__":
     print("\n" + "#" * 60)
     print("# Performance Summary")
     print("#" * 60)
-    print(f"  Small (3.5k cells):    {timings['small']:.2f}s")
-    print(f"  Medium (69k cells):    {timings['medium']:.2f}s")
-    print(f"  Large (858k cells):    {timings['large']:.2f}s")
-    
+    print(f"  {'Dataset':<22} {'Time':>8} {'Peak Python':>14} {'RSS delta':>12}")
+    print(f"  {'-'*22} {'-'*8} {'-'*14} {'-'*12}")
+    for label, key in [("Small (3.5k cells)", "small"),
+                       ("Medium (69k cells)", "medium"),
+                       ("Large (858k cells)", "large")]:
+        t = timings[key]
+        print(f"  {label:<22} {t['time']:>7.2f}s {t['peak_python_mb']:>10.1f} MB {t['rss_delta_mb']:>8.1f} MB")
+
     print("\n" + "#" * 60)
     print("# All tests passed!")
     print("#" * 60)

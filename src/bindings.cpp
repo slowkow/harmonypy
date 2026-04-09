@@ -94,7 +94,8 @@ public:
         std::vector<int> B_vec,
         double batch_proportion_cutoff,
         bool verbose,
-        int random_state
+        int random_state,
+        int ncores
     ) {
         int B = 0;
         for (auto v : B_vec) B += v;
@@ -116,7 +117,8 @@ public:
             B_vec,
             batch_proportion_cutoff,
             verbose,
-            random_state
+            random_state,
+            ncores
         );
     }
 
@@ -159,7 +161,8 @@ NB_MODULE(_harmony_cpp, m) {
             std::vector<int>,      // B_vec
             double,                // batch_proportion_cutoff
             bool,                  // verbose
-            int                    // random_state
+            int,                   // random_state
+            int                    // ncores
         >(),
             nb::arg("Z"),
             nb::arg("batch_of_cell"),
@@ -177,7 +180,8 @@ NB_MODULE(_harmony_cpp, m) {
             nb::arg("B_vec"),
             nb::arg("batch_proportion_cutoff"),
             nb::arg("verbose"),
-            nb::arg("random_state")
+            nb::arg("random_state"),
+            nb::arg("ncores")
         )
         .def("result", &HarmonyWrapper::result, nb::rv_policy::move,
              "Get the corrected data matrix")

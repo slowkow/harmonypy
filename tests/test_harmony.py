@@ -18,7 +18,51 @@ import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
 import os
+import sys
 import harmonypy as hm
+
+
+def _get_current_rss_mb():
+    """Get current RSS (resident set size) in MB. Works on macOS and Linux.
+
+    Unlike resource.getrusage(RUSAGE_SELF).ru_maxrss which only reports the
+    lifetime high-water mark, this returns the *current* RSS — so before/after
+    deltas correctly capture memory that was allocated and freed by C++ code.
+    """
+    if sys.platform == "darwin":
+        import ctypes, ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c"))
+
+        MACH_TASK_BASIC_INFO = 20
+        class mach_task_basic_info(ctypes.Structure):
+            _fields_ = [
+                ("virtual_size", ctypes.c_uint64),
+                ("resident_size", ctypes.c_uint64),
+                ("resident_size_max", ctypes.c_uint64),
+                ("user_time_seconds", ctypes.c_uint32),
+                ("user_time_microseconds", ctypes.c_uint32),
+                ("system_time_seconds", ctypes.c_uint32),
+                ("system_time_microseconds", ctypes.c_uint32),
+                ("policy", ctypes.c_int32),
+                ("suspend_count", ctypes.c_int32),
+            ]
+
+        info = mach_task_basic_info()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // 4)
+        libc.task_info(
+            libc.mach_task_self(),
+            MACH_TASK_BASIC_INFO,
+            ctypes.byref(info),
+            ctypes.byref(count),
+        )
+        return info.resident_size / 1024 / 1024
+    else:
+        # Linux: read from /proc/self/status
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024  # kB -> MB
+        return 0.0
 
 
 def test_run_harmony_small():
@@ -76,7 +120,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("=" * 60)
 
     if not os.path.exists(meta_tsv):
-        return {"time": 0, "peak_python_mb": 0, "rss_delta_mb": 0}
+        return {"time": 0, "rss_delta_mb": 0}
 
     # Load input data
     meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
@@ -91,23 +135,18 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
 
     print("\n--- Running Harmony ---")
-    import tracemalloc, resource
-    tracemalloc.start()
-    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    import gc, sys
+    gc.collect()
+    rss_before = _get_current_rss_mb()
     start = time()
     ho = hm.run_harmony(data_mat, meta_data, [batch_var])
     end = time()
-    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    _, peak_python = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    # ru_maxrss is in bytes on macOS, kilobytes on Linux
-    import sys
-    rss_scale = 1 if sys.platform == "linux" else 1024
-    rss_delta_mb = (rss_after - rss_before) / rss_scale / 1024 / 1024
-    peak_python_mb = peak_python / 1024 / 1024
+    rss_after = _get_current_rss_mb()
+    rss_delta_mb = rss_after - rss_before
     print(f"\n✓ Harmony completed in {end - start:.2f} seconds")
-    print(f"  Peak Python memory: {peak_python_mb:.1f} MB")
-    print(f"  RSS increase: {rss_delta_mb:.1f} MB")
+    print(f"  RSS before: {rss_before:.1f} MB")
+    print(f"  RSS after:  {rss_after:.1f} MB")
+    print(f"  RSS delta:  {rss_delta_mb:.1f} MB")
 
     print("\n--- Harmony Object Info ---")
     print(f"Number of clusters (K): {ho.K}")
@@ -143,7 +182,7 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     assert np.all(np.array(cors_values) >= 0.9), f"Some correlations < 0.9: {cors_values}"
     print("✓ All correlations >= 0.9 (PASSED)")
     
-    return {"time": end - start, "peak_python_mb": peak_python_mb, "rss_delta_mb": rss_delta_mb}
+    return {"time": end - start, "rss_delta_mb": rss_delta_mb}
 
 
 def download_data():
@@ -198,13 +237,13 @@ if __name__ == "__main__":
     print("\n" + "#" * 60)
     print("# Performance Summary")
     print("#" * 60)
-    print(f"  {'Dataset':<22} {'Time':>8} {'Peak Python':>14} {'RSS delta':>12}")
-    print(f"  {'-'*22} {'-'*8} {'-'*14} {'-'*12}")
+    print(f"  {'Dataset':<22} {'Time':>8} {'RSS delta':>12}")
+    print(f"  {'-'*22} {'-'*8} {'-'*12}")
     for label, key in [("Small (3.5k cells)", "small"),
                        ("Medium (69k cells)", "medium"),
                        ("Large (858k cells)", "large")]:
         t = timings[key]
-        print(f"  {label:<22} {t['time']:>7.2f}s {t['peak_python_mb']:>10.1f} MB {t['rss_delta_mb']:>8.1f} MB")
+        print(f"  {label:<22} {t['time']:>7.2f}s {t['rss_delta_mb']:>8.1f} MB")
 
     print("\n" + "#" * 60)
     print("# All tests passed!")

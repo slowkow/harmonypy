@@ -11,74 +11,55 @@
 
 namespace harmony {
 
-// K-means++ initialization
-MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng) {
-    int N = data.n_rows;
-    int d_dim = data.n_cols;
+// K-means initialization (matches R harmony2: initialize_centroids + arma::kmeans)
+//
+// R approach:
+//   1. Pick K random columns from X as initial centroids
+//   2. For each centroid i, compute cosine distance to all cells,
+//      then use Gumbel-max trick (-log(U)/dist) to sample a replacement
+//   3. Refine with arma::kmeans for 10 iterations
+//
+// X is d x N (columns are L2-normalized cells), returns d x K centroids.
+MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng) {
+    int N = X.n_cols;
 
-    MATTYPE centroids(K, d_dim);
-    std::vector<bool> chosen(N, false);
-
-    std::uniform_int_distribution<int> uniform(0, N - 1);
-    int first = uniform(rng);
-    centroids.row(0) = data.row(first);
-    chosen[first] = true;
-
-    VECTYPE min_distances(N, arma::fill::value(std::numeric_limits<float>::max()));
-
-    for (int k = 1; k < K; ++k) {
-        for (int i = 0; i < N; ++i) {
-            if (!chosen[i]) {
-                VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(k-1));
-                float dist = arma::dot(diff_vec, diff_vec);
-                min_distances(i) = std::min(min_distances(i), dist);
-            }
-        }
-
-        arma::vec min_dist_d = arma::conv_to<arma::vec>::from(min_distances);
-        std::discrete_distribution<int> weighted_dist(
-            min_dist_d.begin(), min_dist_d.end()
-        );
-
-        int next = weighted_dist(rng);
-        while (chosen[next]) next = uniform(rng);
-
-        centroids.row(k) = data.row(next);
-        chosen[next] = true;
-        min_distances(next) = 0;
+    // Step 1: Pick K random columns as initial centroids (matches R's randu seeds)
+    std::uniform_real_distribution<float> uniform01(0.0f, 1.0f);
+    MATTYPE Y(X.n_rows, K);
+    for (int i = 0; i < K; ++i) {
+        int idx = static_cast<int>(std::round(uniform01(rng) * N));
+        if (idx >= N) idx = N - 1;
+        Y.col(i) = X.col(idx);
     }
 
-    // Refine with 25 iterations of k-means
-    for (int iter = 0; iter < 25; ++iter) {
-        std::vector<int> assignments(N);
-        for (int i = 0; i < N; ++i) {
-            float min_dist = std::numeric_limits<float>::max();
-            int best_k = 0;
-            for (int kk = 0; kk < K; ++kk) {
-                VECTYPE diff_vec = arma::conv_to<VECTYPE>::from(data.row(i) - centroids.row(kk));
-                float dist = arma::dot(diff_vec, diff_vec);
-                if (dist < min_dist) { min_dist = dist; best_k = kk; }
-            }
-            assignments[i] = best_k;
-        }
+    // Step 2: Gumbel-max weighted sampling (matches R's initialize_centroids)
+    std::set<unsigned> chosen;
+    for (int i = 0; i < K; ++i) {
+        // Cosine distance from centroid i to all cells
+        VECTYPE distances = arma::abs((2.0f * (1.0f - Y.col(i).t() * X)).as_col());
 
-        MATTYPE new_centroids(K, d_dim, arma::fill::zeros);
-        VECTYPE counts(K, arma::fill::zeros);
-        for (int i = 0; i < N; ++i) {
-            new_centroids.row(assignments[i]) += data.row(i);
-            counts(assignments[i]) += 1;
-        }
-        for (int kk = 0; kk < K; ++kk) {
-            if (counts(kk) > 0) new_centroids.row(kk) /= counts(kk);
-            else new_centroids.row(kk) = data.row(uniform(rng));
-        }
+        // Gumbel-max trick: prob = -log(U) / dist, pick argmin
+        VECTYPE random_numbers(N, arma::fill::none);
+        for (int j = 0; j < N; ++j) random_numbers(j) = uniform01(rng);
+        VECTYPE prob = -arma::log(random_numbers) / (distances + 1e-10f);
 
-        float change = arma::norm(new_centroids - centroids, "fro");
-        centroids = new_centroids;
-        if (change < 1e-6f) break;
+        // Avoid re-selecting the same point
+        for (auto idx : chosen) prob(idx) = prob.max();
+        unsigned best = prob.index_min();
+        while (chosen.count(best)) {
+            prob(best) = prob.max();
+            best = prob.index_min();
+        }
+        chosen.insert(best);
+        Y.col(i) = X.col(best);
     }
 
-    return centroids;
+    // Step 3: Refine with arma::kmeans for 10 iterations (matches R)
+    for (int i = 0; i < 10; ++i) {
+        arma::kmeans(Y, X, K, arma::keep_existing, 1, false);
+    }
+
+    return Y;
 }
 
 // Constructor
@@ -186,9 +167,9 @@ void Harmony::allocate_buffers() {
 }
 
 void Harmony::init_cluster() {
-    // Matches R: init_cluster_cpp
-    MATTYPE centroids = kmeans_plusplus(Z_corr.t(), K, rng);
-    Y = centroids.t();
+    // Matches R: Y = kmeans_centers(Z_corr, K)
+    // kmeans_init works on d x N, returns d x K
+    Y = kmeans_init(Z_corr, K, rng);
     Y = arma::normalise(Y, 2, 0);
 
     dist_mat = 2.0f * (1.0f - Y.t() * Z_corr);
@@ -208,21 +189,25 @@ void Harmony::init_cluster() {
 
 void Harmony::compute_objective() {
     // Matches R: compute_objective
+    // Uses O (K×B) instead of R's K×N Phi matmul to avoid ~327 MB temporary.
+    // Mathematically identical: sum_j(R_kj * (theta_log * Phi)_kj) = sum_b(O_kb * theta_log_kb)
     const float norm_const = 2000.0f / static_cast<float>(N);
 
+    // K-means error: sum(R % dist_mat)
     float kmeans_error = arma::accu(R % dist_mat);
 
-    // Entropy: sum(xlogy(R, R) .* sigma)
+    // Entropy: sum(xlogy(R, R) .each_col() % sigma)
     MATTYPE log_R = R;
     log_R.transform([](float val) { return val > 0 ? val * std::log(val) : 0.0f; });
     float _entropy = arma::as_scalar(arma::accu(log_R.each_col() % sigma));
 
-    // Cross entropy: matches R formula exactly
-    // (R .each_col() % sigma) % ((theta_log) * Phi)
+    // Cross entropy via O (K×B) — equivalent to R's (R % sigma) % (theta_log * Phi)
     MATTYPE ratio = (O + E + 1) / (2 * E + 1);
     ratio.transform([](float val) { return std::log(val); });
     ratio.each_row() %= theta.t();
-    float _cross_entropy = arma::accu((R.each_col() % sigma) % (ratio * Phi));
+    ratio.each_col() %= sigma;
+    ratio %= O;
+    float _cross_entropy = arma::accu(ratio);
 
     objective_kmeans.push_back((kmeans_error + _entropy + _cross_entropy) * norm_const);
     objective_kmeans_dist.push_back(kmeans_error * norm_const);

@@ -35,7 +35,7 @@ inline MATTYPE harmony_pow(MATTYPE A, const VECTYPE& T) {
     return A;
 }
 
-MATTYPE kmeans_plusplus(const MATTYPE& data, int K, std::mt19937& rng);
+MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
 
 class Harmony {
 public:

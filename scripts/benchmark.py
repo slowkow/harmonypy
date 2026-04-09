@@ -3,7 +3,9 @@
 
 Each benchmark runs in a subprocess (for clean RSS measurement)
 using the SAME Python environment that invokes this script.
-No separate venvs are created.
+
+Loads harmony1 (v0.2.0) baseline numbers from a pre-existing JSON file
+for comparison in the output plot.
 
 Usage:
     # Install harmonypy first, then run:
@@ -24,7 +26,7 @@ from time import time
 
 
 # ---------------------------------------------------------------------------
-# Worker: runs in a subprocess so peak RSS is isolated per benchmark
+# Worker: runs in a subprocess so RSS is isolated per benchmark
 # ---------------------------------------------------------------------------
 
 def _get_current_rss_bytes():
@@ -96,7 +98,7 @@ def run_worker(meta_path, pca_path, batch_var, output_dir):
         backend_available = "pytorch"
 
     start = time()
-    ho = hm.run_harmony(pca, meta, batch_var, verbose=False, device="cpu")
+    ho = hm.run_harmony(pca, meta, batch_var, verbose=False)
     elapsed = time() - start
 
     rss_after_harmony = _get_current_rss_bytes()
@@ -135,6 +137,7 @@ def run_worker(meta_path, pca_path, batch_var, output_dir):
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUBSAMPLE_DIR = os.path.join(REPO_DIR, "data/tahoe-ilya/subsample")
 OUTPUT_DIR = os.path.join(REPO_DIR, "data/tahoe-ilya/subsample/results")
+BASELINE_PATH = os.path.join(REPO_DIR, "data/tahoe-ilya/pytorch/benchmark_results.json")
 BATCH_VAR = "sample"
 
 # Vary batches (fixed 1M cells)
@@ -195,10 +198,7 @@ def run_benchmark(meta_file, pca_file):
             result = json.loads(line)
             print(f"    {result['n_cells']:>12,} cells, {result['n_batches']:>5} batches "
                   f"-> {result['time_seconds']:>7.1f}s, "
-                  f"baseline {result['rss_baseline_gb']:.2f} + "
-                  f"load {result['rss_loading_gb']:.2f} + "
-                  f"harmony {result['rss_harmony_gb']:.2f} = "
-                  f"{result['rss_total_gb']:.2f} GB"
+                  f"harmony {result['rss_harmony_gb']:.2f} GB"
                   f"  [{result['backend']}]")
             return result
 
@@ -206,35 +206,82 @@ def run_benchmark(meta_file, pca_file):
     return None
 
 
-def plot_results(all_results, output_path):
-    """Create a 2-panel figure (memory + time) for both sweeps."""
+def load_baseline():
+    """Load harmony1 baseline results from the pre-existing JSON file."""
+    if not os.path.exists(BASELINE_PATH):
+        print(f"Baseline not found: {BASELINE_PATH}")
+        return {}, {}
+    with open(BASELINE_PATH) as f:
+        data = json.load(f)
+    return data.get("harmony1_batch", []), data.get("harmony1_cell", [])
+
+
+def plot_results(current_results, output_path):
+    """Create a 4-panel figure comparing old (harmony1) vs current performance."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    baseline_batch, baseline_cell = load_baseline()
+
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    color = "#00BFC4"
+    color_old = "#999999"
+    color_new = "#00BFC4"
 
-    batch_results = all_results.get("batch", [])
-    cell_results = all_results.get("cell", [])
+    batch_results = current_results.get("batch", [])
+    cell_results = current_results.get("cell", [])
 
+    # --- Top row: vary batches (fixed 1M cells) ---
     if batch_results:
-        x = [r["n_batches"] for r in batch_results]
-        axes[0, 0].plot(x, [r["rss_harmony_gb"] for r in batch_results], "o-", color=color)
-        axes[0, 0].set_xlabel("Number of batches")
-        axes[0, 0].set_ylabel("Memory (GB)")
-        axes[0, 1].plot(x, [r["time_seconds"] / 60 for r in batch_results], "o-", color=color)
-        axes[0, 1].set_xlabel("Number of batches")
-        axes[0, 1].set_ylabel("Runtime (minutes)")
+        x_new = [r["n_batches"] for r in batch_results]
+        # Memory
+        ax = axes[0, 0]
+        if baseline_batch:
+            x_old = [r["n_batches"] for r in baseline_batch]
+            ax.plot(x_old, [r["rss_harmony_gb"] for r in baseline_batch],
+                    "o--", color=color_old, label="harmonypy 0.2")
+        ax.plot(x_new, [r["rss_harmony_gb"] for r in batch_results],
+                "o-", color=color_new, label="harmonypy 2.0")
+        ax.set_xlabel("Number of batches")
+        ax.set_ylabel("Memory (GB)")
+        ax.legend()
 
+        # Time
+        ax = axes[0, 1]
+        if baseline_batch:
+            ax.plot(x_old, [r["time_seconds"] / 60 for r in baseline_batch],
+                    "o--", color=color_old, label="harmonypy 0.2")
+        ax.plot(x_new, [r["time_seconds"] / 60 for r in batch_results],
+                "o-", color=color_new, label="harmonypy 2.0")
+        ax.set_xlabel("Number of batches")
+        ax.set_ylabel("Runtime (minutes)")
+        ax.legend()
+
+    # --- Bottom row: vary cells (fixed 800 batches) ---
     if cell_results:
-        x = [r["n_cells"] / 1e6 for r in cell_results]
-        axes[1, 0].plot(x, [r["rss_harmony_gb"] for r in cell_results], "o-", color=color)
-        axes[1, 0].set_xlabel("Millions of cells")
-        axes[1, 0].set_ylabel("Memory (GB)")
-        axes[1, 1].plot(x, [r["time_seconds"] / 60 for r in cell_results], "o-", color=color)
-        axes[1, 1].set_xlabel("Millions of cells")
-        axes[1, 1].set_ylabel("Runtime (minutes)")
+        x_new = [r["n_cells"] / 1e6 for r in cell_results]
+        # Memory
+        ax = axes[1, 0]
+        if baseline_cell:
+            x_old = [r["n_cells"] / 1e6 for r in baseline_cell]
+            ax.plot(x_old, [r["rss_harmony_gb"] for r in baseline_cell],
+                    "o--", color=color_old, label="harmonypy 0.2")
+        ax.plot(x_new, [r["rss_harmony_gb"] for r in cell_results],
+                "o-", color=color_new, label="harmonypy 2.0")
+        ax.set_xlabel("Millions of cells")
+        ax.set_ylabel("Memory (GB)")
+        ax.legend()
+
+        # Time
+        ax = axes[1, 1]
+        if baseline_cell:
+            ax.plot(x_old, [r["time_seconds"] / 60 for r in baseline_cell],
+                    "o--", color=color_old, label="harmonypy 0.2")
+        ax.plot(x_new, [r["time_seconds"] / 60 for r in cell_results],
+                "o-", color=color_new, label="harmonypy 2.0")
+        ax.set_xlabel("Millions of cells")
+        ax.set_ylabel("Runtime (minutes)")
+        ax.legend()
 
     for ax, letter in zip(axes.flat, "abcd"):
         ax.set_title(letter, loc="left", fontweight="bold")
@@ -283,7 +330,7 @@ def main():
         json.dump(all_results, f, indent=2)
     print(f"\nResults saved: {results_path}")
 
-    # Plot
+    # Plot (compares current results with harmony1 baseline)
     plot_results(all_results, os.path.join(REPO_DIR, "data/tahoe-ilya/benchmark.png"))
 
 

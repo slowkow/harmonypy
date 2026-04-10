@@ -28,7 +28,9 @@ else()
         URL https://sourceforge.net/projects/arma/files/armadillo-14.2.2.tar.xz
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
-    FetchContent_MakeAvailable(armadillo)
+    # Use FetchContent_Populate (not MakeAvailable) to get headers only,
+    # without adding Armadillo's install targets to the wheel.
+    FetchContent_Populate(armadillo)
     set(ARMADILLO_INCLUDE ${armadillo_SOURCE_DIR}/include)
 endif()
 

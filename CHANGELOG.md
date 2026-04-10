@@ -1,19 +1,30 @@
-# 2.0.0 - 2026-03-25
+# 2.0.0 - 2026-04-10
 
-Updated to match the [harmony2](https://github.com/immunogenomics/harmony/tree/harmony2) R package.
+Complete rewrite with C++ backend (Armadillo + nanobind), matching the
+[R harmony2 package](https://github.com/immunogenomics/harmony) step-by-step.
 
-- **Breaking:** `lamb` now defaults to automatic lambda estimation (was fixed `1`).
-  Pass `lamb=1` explicitly to restore previous behavior.
-- **Breaking:** Default parameter changes to match R harmony2:
-  `max_iter_kmeans` 20→4, `epsilon_cluster` 1e-5→1e-3, `epsilon_harmony` 1e-4→1e-2.
-- New diversity penalty formula: `(2E+1)/(O+E+1)` replaces `E/(O+E)` for improved
-  numerical stability.
-- Clustering loop restructured: cold-start R re-estimation after correction,
-  centroid updates moved into the ridge regression step.
-- Arrowhead matrix inverse optimization for single-covariate batch correction.
-- New `batch_prop_cutoff` parameter (default 1e-5) excludes underrepresented
+### New
+- C++ backend using Armadillo for BLAS-accelerated sparse matrix operations.
+- Pre-built wheels for Linux (x86_64, aarch64) and macOS (x86_64, arm64).
+- `ncores` parameter for multi-threaded BLAS on Linux (via OpenBLAS/OpenMP).
+- `batch_prop_cutoff` parameter (default 1e-5) excludes underrepresented
   batches from correction in each cluster.
-- Correlation with R harmony2 output: ≥0.998 across all PCs on test data.
+- Arrowhead matrix inverse for single-covariate batch correction.
+- Accepts pandas DataFrame, dict, or NumPy array for `meta_data`.
+- Non-numeric DataFrame columns (e.g. barcodes) are dropped automatically.
+
+### Breaking changes
+- `lamb` now defaults to automatic lambda estimation (was fixed `1`).
+  Pass `lamb=1` explicitly to restore previous behavior.
+- Default parameters changed to match R harmony2:
+  `max_iter_kmeans` 20→4, `epsilon_cluster` 1e-5→1e-3, `epsilon_harmony` 1e-4→1e-2.
+- Requires a C++ compiler and BLAS library for building from source (pre-built
+  wheels are available on PyPI).
+- Only `numpy` is required at runtime (previously required pandas, scipy, sklearn).
+
+### Performance
+- 858k cells in ~36s on Apple M1 Ultra (vs ~340s in v0.1.0).
+- Correlation with R harmony2: ≥0.998 across all PCs on test data.
 
 # 0.2.0 - 2025-01-09
 

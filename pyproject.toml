@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "harmonypy"
 version = "2.0.0"
-description = "A data integration algorithm."
+description = "Batch correction for single-cell data using the Harmony algorithm with a C++ Armadillo backend."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.9"
@@ -13,12 +13,20 @@ authors = [
     { name = "Kamil Slowikowski", email = "kslowikowski@gmail.com" },
     { name = "John Arevalo", email = "johnarevalo@gmail.com" }
 ]
+keywords = ["harmony", "batch-correction", "integration", "single-cell", "bioinformatics"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Natural Language :: English",
-    "Operating System :: OS Independent",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
@@ -33,6 +41,9 @@ test = [
 
 [project.urls]
 Homepage = "https://github.com/slowkow/harmonypy"
+Repository = "https://github.com/slowkow/harmonypy"
+Issues = "https://github.com/slowkow/harmonypy/issues"
+Changelog = "https://github.com/slowkow/harmonypy/blob/master/CHANGELOG.md"
 
 [tool.scikit-build]
 wheel.packages = ["harmonypy"]

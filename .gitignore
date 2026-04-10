@@ -138,3 +138,4 @@ dmypy.json
 uv.lock
 
 data/tahoe-ilya/
+benchmark.png

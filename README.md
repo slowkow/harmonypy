@@ -114,6 +114,19 @@ sc.tl.leiden(adata)
 On Linux, `ncores > 1` enables parallel BLAS via OpenBLAS for matrix operations. On macOS, `ncores` has no effect (Accelerate does not support OpenMP).
 
 
+## Performance
+
+The script in `tests/test_harmony.py` on an Apple M1 (2022) chip reports:
+
+```
+  Dataset                    Time    RSS delta
+  ---------------------- -------- ------------
+  Small (3.5k cells)        0.74s     66.3 MB
+  Medium (69k cells)       20.15s    321.6 MB
+  Large (858k cells)       38.38s   2519.1 MB
+```
+
+
 ## Citation
 
 If you use Harmony in your work, please cite the original paper:

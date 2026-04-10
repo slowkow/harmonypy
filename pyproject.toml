@@ -50,6 +50,7 @@ test-requires = ["pytest", "scipy"]
 test-command = "cd {project} && pytest tests/test_harmony.py::test_run_harmony_small -v"
 
 [tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
 before-all = "yum install -y openblas-devel lapack-devel || dnf install -y openblas-devel lapack-devel"
 
 [tool.cibuildwheel.macos]

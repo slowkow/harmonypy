@@ -6,7 +6,7 @@ Complete rewrite with C++ backend (Armadillo + nanobind), matching the
 ### New
 - C++ backend using Armadillo for BLAS-accelerated sparse matrix operations.
 - Pre-built wheels for Linux (x86_64, aarch64) and macOS (x86_64, arm64).
-- `ncores` parameter for multi-threaded BLAS on Linux (via OpenBLAS/OpenMP).
+- `ncores` parameter for multi-threaded parallel operations (via std::thread, works on macOS and Linux).
 - `batch_prop_cutoff` parameter (default 1e-5) excludes underrepresented
   batches from correction in each cluster.
 - Arrowhead matrix inverse for single-covariate batch correction.

@@ -1,17 +1,25 @@
-# 2.0.0 - 2026-04-10
+# 2.0.0 - 2026-04-16
 
-Complete rewrite with C++ backend (Armadillo + nanobind), matching the
+Complete rewrite with C++ backend ([Armadillo](https://arma.sourceforge.net/) +
+[nanobind](https://github.com/wjakob/nanobind)), matching the
 [R harmony2 package](https://github.com/immunogenomics/harmony) step-by-step.
 
 ### New
-- C++ backend using Armadillo for BLAS-accelerated sparse matrix operations.
-- Pre-built wheels for Linux (x86_64, aarch64) and macOS (x86_64, arm64).
+- C++ backend using Armadillo for BLAS-accelerated dense matrix operations
+  (Accelerate on macOS, OpenBLAS on Linux). Custom scatter/gather kernels
+  replace all sparse matrix operations by exploiting Phi's one-hot structure.
+- Pre-built wheels for Linux (x86_64, aarch64) and macOS (x86_64, arm64),
+  Python 3.9–3.13. Armadillo headers fetched at build time — no system
+  install required.
+- K-means initialization matches R exactly: Gumbel-max cosine-distance
+  sampling followed by `arma::kmeans` refinement.
 - `ncores` parameter to control BLAS thread count (0 = all cores, default).
 - `batch_prop_cutoff` parameter (default 1e-5) excludes underrepresented
   batches from correction in each cluster.
-- Arrowhead matrix inverse for single-covariate batch correction.
-- Accepts pandas DataFrame, dict, or NumPy array for `meta_data`.
+- Arrowhead matrix inverse for fast single-covariate batch correction.
+- Accepts pandas DataFrame, dict of arrays, or NumPy array for `meta_data`.
 - Non-numeric DataFrame columns (e.g. barcodes) are dropped automatically.
+- Stricter input validation with clear error messages for shape mismatches.
 
 ### Breaking changes
 - `lamb` now defaults to automatic lambda estimation (was fixed `1`).
@@ -20,11 +28,13 @@ Complete rewrite with C++ backend (Armadillo + nanobind), matching the
   `max_iter_kmeans` 20→4, `epsilon_cluster` 1e-5→1e-3, `epsilon_harmony` 1e-4→1e-2.
 - Requires a C++ compiler and BLAS library for building from source (pre-built
   wheels are available on PyPI).
-- Only `numpy` is required at runtime (previously required pandas, scipy, sklearn).
+- Only `numpy` is required at runtime (previously required pandas, scipy,
+  scikit-learn, torch).
 
 ### Performance
-- 858k cells in ~36s on Apple M1 Ultra (vs ~340s in v0.1.0).
+- 858k cells in ~36s on Apple M1 Ultra (vs ~340s in v0.1.0, ~38s in R harmony2).
 - Correlation with R harmony2: ≥0.998 across all PCs on test data.
+- No sparse matrices allocated — memory usage ~50% lower than sparse approach.
 
 # 0.2.0 - 2025-01-09
 

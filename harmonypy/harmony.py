@@ -15,17 +15,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import os
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
-
-# Default BLAS to single-threaded so it doesn't compete with our own
-# std::thread parallelism (controlled by the ncores parameter).
-if "OMP_NUM_THREADS" not in os.environ:
-    os.environ["OMP_NUM_THREADS"] = "1"
-if "OPENBLAS_NUM_THREADS" not in os.environ:
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import logging
+import os
 
 # create logger
 logger = logging.getLogger('harmonypy')
@@ -56,7 +49,7 @@ def run_harmony(
     batch_prop_cutoff=1e-5,
     verbose=True,
     random_state=0,
-    ncores=1,
+    ncores=0,
 ):
     """Run Harmony batch effect correction.
 
@@ -100,9 +93,8 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of threads for parallel operations. Default is 1.
-        Values > 1 parallelize scatter/gather kernels and per-batch
-        ridge correction using std::thread. Works on macOS and Linux.
+        Number of BLAS threads for matrix operations. Default is 0
+        (use all available cores). Set to 1 for single-threaded execution.
 
     Returns
     -------
@@ -219,6 +211,12 @@ def run_harmony(
     else:
         lamb_cpp = lamb.astype(np.float64)
 
+    # Set BLAS thread count (Accelerate on macOS, OpenBLAS on Linux).
+    # ncores=0 means use all available cores (don't set env vars).
+    if ncores > 0:
+        os.environ["OMP_NUM_THREADS"] = str(ncores)
+        os.environ["OPENBLAS_NUM_THREADS"] = str(ncores)
+
     cpp_harmony = HarmonyCpp(
         data_f64,
         batch_of_cell_c,
@@ -236,8 +234,7 @@ def run_harmony(
         phi_n.tolist(),
         float(batch_prop_cutoff),
         verbose,
-        random_state if random_state is not None else 0,
-        ncores
+        random_state if random_state is not None else 0
     )
     return Harmony(cpp_harmony)
 

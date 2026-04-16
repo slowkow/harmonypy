@@ -3,8 +3,8 @@
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 //
 // Uses custom scatter/gather kernels on a batch_id vector instead of
-// sparse Phi matrices. Parallelized with std::thread (no OpenMP needed,
-// works on macOS and Linux).
+// sparse Phi matrices. BLAS threading (Accelerate/OpenBLAS) is controlled
+// by the ncores parameter via environment variables in the Python layer.
 
 #include "harmony.hpp"
 #include <numeric>
@@ -16,51 +16,17 @@ namespace harmony {
 // Custom kernels
 // =========================================================================
 
-// O[:,b] += sign * sum of Rsub columns where ids[j] == b
-// Thread-safe: uses per-thread partial accumulators when ncores > 1
 void Harmony::scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign) {
     const int n = Rsub.n_cols;
     const int k = Rsub.n_rows;
-
-    if (ncores <= 1 || n < 1000) {
-        // Single-threaded fast path
-        for (int j = 0; j < n; ++j) {
-            unsigned b = ids(j);
-            const float* col = Rsub.colptr(j);
-            float* dst = O.colptr(b);
-            if (sign > 0) {
-                for (int i = 0; i < k; ++i) dst[i] += col[i];
-            } else {
-                for (int i = 0; i < k; ++i) dst[i] -= col[i];
-            }
-        }
-        return;
-    }
-
-    // Multi-threaded: each thread accumulates into its own partial O,
-    // then we reduce into the shared O.
-    int nt = std::min(ncores, n);
-    std::vector<MATTYPE> partials(nt, MATTYPE(k, B, arma::fill::zeros));
-
-    parallel_for(n, nt, [&](int start, int end) {
-        // Determine which thread we are (from start index)
-        int tid = start / ((n + nt - 1) / nt);
-        if (tid >= nt) tid = nt - 1;
-        MATTYPE& part = partials[tid];
-        for (int j = start; j < end; ++j) {
-            unsigned b = ids(j);
-            const float* col = Rsub.colptr(j);
-            float* dst = part.colptr(b);
-            for (int i = 0; i < k; ++i) dst[i] += col[i];
-        }
-    });
-
-    // Reduce
-    for (int t = 0; t < nt; ++t) {
+    for (int j = 0; j < n; ++j) {
+        unsigned b = ids(j);
+        const float* col = Rsub.colptr(j);
+        float* dst = O.colptr(b);
         if (sign > 0) {
-            O += partials[t];
+            for (int i = 0; i < k; ++i) dst[i] += col[i];
         } else {
-            O -= partials[t];
+            for (int i = 0; i < k; ++i) dst[i] -= col[i];
         }
     }
 }
@@ -125,8 +91,7 @@ Harmony::Harmony(
     const std::vector<int>& B_vec_in,
     double batch_proportion_cutoff,
     bool verbose,
-    int random_state,
-    int ncores
+    int random_state
 ) : max_iter_harmony(max_iter_harmony),
     max_iter_kmeans(max_iter_kmeans),
     epsilon_kmeans(static_cast<float>(epsilon_kmeans)),
@@ -138,8 +103,7 @@ Harmony::Harmony(
     alpha(static_cast<float>(alpha_in)),
     batch_proportion_cutoff(static_cast<float>(batch_proportion_cutoff)),
     B_vec(B_vec_in),
-    rng(random_state),
-    ncores(ncores)
+    rng(random_state)
 {
     Z_orig = arma::conv_to<MATTYPE>::from(Z);
     Z_corr = arma::normalise(Z_orig, 2, 0);
@@ -343,29 +307,23 @@ void Harmony::update_R() {
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
         arma::uvec block_ids = batch_id_shuf.subvec(idx_min, idx_max);
 
-        // Step 1: remove cells from O and E
         E -= arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, -1.0f);
 
-        // Step 2: recompute R for this block
         Rcells = -dist_matcells;
         Rcells.each_col() /= sigma;
         Rcells = arma::exp(Rcells);
         Rcells = arma::normalise(Rcells, 1, 0);
 
-        // Apply diversity penalty (gather-multiply, parallelized)
         MATTYPE div_ratio = harmony_pow(((2*E) + 1) / (O + E + 1), theta);
-        parallel_for(block_n, ncores, [&](int start, int end) {
-            for (int j = start; j < end; ++j) {
-                unsigned b = block_ids(j);
-                float* col = Rcells.colptr(j);
-                const float* src = div_ratio.colptr(b);
-                for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
-            }
-        });
+        for (unsigned j = 0; j < block_n; ++j) {
+            unsigned b = block_ids(j);
+            float* col = Rcells.colptr(j);
+            const float* src = div_ratio.colptr(b);
+            for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
+        }
         Rcells = arma::normalise(Rcells, 1, 0);
 
-        // Step 3: put cells back
         E += arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, 1.0f);
     }
@@ -402,7 +360,7 @@ bool Harmony::check_convergence(int i_type) {
 }
 
 // =========================================================================
-// moe_correct_ridge — parallelized across batches
+// moe_correct_ridge
 // =========================================================================
 
 void Harmony::moe_correct_ridge() {
@@ -438,7 +396,6 @@ void Harmony::moe_correct_ridge() {
         unsigned n_keep = keep.size();
         bool all_qualify = (n_keep == static_cast<unsigned>(B));
 
-        // Lambda
         VECTYPE lamb_vec;
         if (all_qualify) {
             lamb_vec = lambda_estimation ? find_lambda(alpha, VECTYPE(E.row(k).t())) : lambda;
@@ -456,7 +413,6 @@ void Harmony::moe_correct_ridge() {
             }
         }
 
-        // Build cov_mat from O[k,:]
         unsigned mat_size = (all_qualify ? B : n_keep) + 1;
         VECTYPE Ok(all_qualify ? B : n_keep);
         if (all_qualify) {
@@ -475,7 +431,6 @@ void Harmony::moe_correct_ridge() {
         }
         cov_mat += arma::diagmat(lamb_vec);
 
-        // Invert
         MATTYPE inv_cov;
         if (B_vec.size() > 1) {
             inv_cov = arma::inv(cov_mat);
@@ -495,19 +450,15 @@ void Harmony::moe_correct_ridge() {
         ROWTYPE Rk = R.row(k);
         unsigned n_batches = all_qualify ? B : n_keep;
 
-        // Compute per-batch z_sums (parallelized — each batch is independent)
         std::vector<VECTYPE> z_sums(n_batches);
-
-        parallel_for(n_batches, ncores, [&](int start, int end) {
-            for (int i = start; i < end; ++i) {
-                unsigned b = all_qualify ? i : keep[i];
-                const arma::uvec& idx = batch_index[b];
-                z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            }
-        });
-
         VECTYPE z_sum_all(d, arma::fill::zeros);
-        for (unsigned i = 0; i < n_batches; ++i) z_sum_all += z_sums[i];
+
+        for (unsigned i = 0; i < n_batches; ++i) {
+            unsigned b = all_qualify ? i : keep[i];
+            const arma::uvec& idx = batch_index[b];
+            z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
+            z_sum_all += z_sums[i];
+        }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
         for (unsigned i = 0; i < n_batches; ++i) {
@@ -517,22 +468,17 @@ void Harmony::moe_correct_ridge() {
         Y.col(k) = W.row(0).t();
         W.row(0).zeros();
 
-        // Apply correction (parallelized — each batch writes disjoint columns)
         if (all_qualify) {
-            parallel_for(B, ncores, [&](int start, int end) {
-                for (int b = start; b < end; ++b) {
-                    const arma::uvec& idx = batch_index[b];
-                    Z_corr.cols(idx) -= W.row(b + 1).t() * Rk.cols(idx);
-                }
-            });
+            for (int b = 0; b < B; ++b) {
+                const arma::uvec& idx = batch_index[b];
+                Z_corr.cols(idx) -= W.row(b + 1).t() * Rk.cols(idx);
+            }
         } else {
-            parallel_for(n_keep, ncores, [&](int start, int end) {
-                for (int i = start; i < end; ++i) {
-                    unsigned b = keep[i];
-                    const arma::uvec& idx = batch_index[b];
-                    Z_corr.cols(idx) -= W.row(i + 1).t() * Rk.cols(idx);
-                }
-            });
+            for (unsigned i = 0; i < n_keep; ++i) {
+                unsigned b = keep[i];
+                const arma::uvec& idx = batch_index[b];
+                Z_corr.cols(idx) -= W.row(i + 1).t() * Rk.cols(idx);
+            }
         }
     }
 

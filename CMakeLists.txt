@@ -68,9 +68,5 @@ else()
     endif()
 endif()
 
-# Link pthreads (required for std::thread)
-find_package(Threads REQUIRED)
-target_link_libraries(_harmony_cpp PRIVATE Threads::Threads)
-
 # Install target
 install(TARGETS _harmony_cpp LIBRARY DESTINATION harmonypy)

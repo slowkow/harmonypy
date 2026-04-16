@@ -19,8 +19,8 @@ import os
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
 
-# Prevent OpenMP runtime conflicts on macOS between openblas (via Armadillo)
-# and other libraries. Setting threads to 1 avoids the conflict.
+# Default BLAS to single-threaded so it doesn't compete with our own
+# std::thread parallelism (controlled by the ncores parameter).
 if "OMP_NUM_THREADS" not in os.environ:
     os.environ["OMP_NUM_THREADS"] = "1"
 if "OPENBLAS_NUM_THREADS" not in os.environ:
@@ -100,9 +100,9 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of threads for BLAS/OpenMP math operations. Default is 1.
-        Values > 1 enable parallel linear algebra on Linux (via OpenBLAS).
-        Has no effect on macOS (Accelerate is not thread-safe with OpenMP).
+        Number of threads for parallel operations. Default is 1.
+        Values > 1 parallelize scatter/gather kernels and per-batch
+        ridge correction using std::thread. Works on macOS and Linux.
 
     Returns
     -------

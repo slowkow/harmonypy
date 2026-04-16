@@ -16,17 +16,22 @@ namespace harmony {
 // Custom kernels
 // =========================================================================
 
-void Harmony::scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign) {
+// Scatter-add R columns into O for each covariate's batch assignment.
+// ids is n_cov x n_cells (matching batch_ids layout).
+void Harmony::scatter_add_O(const MATTYPE& Rsub, const arma::Mat<arma::uword>& ids, float sign) {
     const int n = Rsub.n_cols;
     const int k = Rsub.n_rows;
-    for (int j = 0; j < n; ++j) {
-        unsigned b = ids(j);
-        const float* col = Rsub.colptr(j);
-        float* dst = O.colptr(b);
-        if (sign > 0) {
-            for (int i = 0; i < k; ++i) dst[i] += col[i];
-        } else {
-            for (int i = 0; i < k; ++i) dst[i] -= col[i];
+    const int nc = ids.n_rows;
+    for (int c = 0; c < nc; ++c) {
+        for (int j = 0; j < n; ++j) {
+            unsigned b = ids(c, j);
+            const float* col = Rsub.colptr(j);
+            float* dst = O.colptr(b);
+            if (sign > 0) {
+                for (int i = 0; i < k; ++i) dst[i] += col[i];
+            } else {
+                for (int i = 0; i < k; ++i) dst[i] -= col[i];
+            }
         }
     }
 }
@@ -76,7 +81,7 @@ MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng) {
 
 Harmony::Harmony(
     const arma::mat& Z,
-    const arma::sp_mat& Phi_in,
+    const arma::Mat<int64_t>& batch_of_cell,
     const arma::vec& Pr_b_in,
     const arma::vec& sigma_in,
     const arma::vec& theta_in,
@@ -111,7 +116,8 @@ Harmony::Harmony(
     Pr_b = arma::conv_to<VECTYPE>::from(Pr_b_in);
     N = Z.n_cols;
     d = Z.n_rows;
-    B = Phi_in.n_rows;
+    B = 0;
+    for (auto v : B_vec) B += v;
 
     sigma = arma::conv_to<VECTYPE>::from(sigma_in);
     theta = arma::conv_to<VECTYPE>::from(theta_in);
@@ -131,7 +137,7 @@ Harmony::Harmony(
         covariate_bounds.push_back(B_vec.front());
     }
 
-    build_batch_structures(Phi_in);
+    build_batch_structures(batch_of_cell);
     allocate_buffers();
 
     if (verbose) std::cout << "Computing initial centroids..." << std::endl;
@@ -140,23 +146,63 @@ Harmony::Harmony(
     harmonize(max_iter_harmony, verbose);
 }
 
-void Harmony::build_batch_structures(const arma::sp_mat& Phi_in) {
-    batch_id.set_size(N);
-    arma::sp_mat::const_iterator it = Phi_in.begin();
-    arma::sp_mat::const_iterator it_end = Phi_in.end();
-    for (; it != it_end; ++it) {
-        batch_id(it.col()) = it.row();
+void Harmony::build_batch_structures(const arma::Mat<int64_t>& batch_of_cell) {
+    // batch_of_cell is n_cov x N (int64). Each row c contains the batch
+    // index for covariate c, with values in [offset_c, offset_c + n_levels_c).
+    n_covariates = batch_of_cell.n_rows;
+    batch_ids.set_size(n_covariates, N);
+    for (int c = 0; c < n_covariates; ++c) {
+        for (int j = 0; j < N; ++j) {
+            batch_ids(c, j) = static_cast<arma::uword>(batch_of_cell(c, j));
+        }
     }
 
-    batch_sizes = arma::conv_to<VECTYPE>::from(arma::vec(arma::sum(Phi_in, 1)));
+    // Compute batch sizes (count cells per batch across all covariates)
+    batch_sizes.zeros(B);
+    for (int c = 0; c < n_covariates; ++c) {
+        for (int j = 0; j < N; ++j) {
+            batch_sizes(batch_ids(c, j)) += 1.0f;
+        }
+    }
+    // Each cell is counted n_covariates times; normalize
+    batch_sizes /= static_cast<float>(n_covariates);
+
+    // Build per-batch cell index lists (using first covariate for indexing)
+    // For ridge correction, batch_index[b] lists cells belonging to batch b.
+    // With multiple covariates, a cell's "primary" batch is determined by
+    // which covariate each batch belongs to (tracked via covariate_bounds).
     batch_index.resize(B);
+
+    // Determine which covariate owns each batch
+    std::vector<int> cov_of_batch(B);
+    int idx = 0;
+    for (size_t c = 0; c < B_vec.size(); ++c) {
+        for (int i = 0; i < B_vec[c]; ++i) {
+            cov_of_batch[idx++] = c;
+        }
+    }
+
+    // Count cells per batch
+    std::vector<unsigned> counts(B, 0);
+    for (int b = 0; b < B; ++b) {
+        int c = cov_of_batch[b];
+        for (int j = 0; j < N; ++j) {
+            if (batch_ids(c, j) == static_cast<arma::uword>(b)) counts[b]++;
+        }
+    }
+    for (int b = 0; b < B; ++b) {
+        batch_index[b].set_size(counts[b]);
+    }
+
+    // Fill batch_index
     std::vector<unsigned> counters(B, 0);
     for (int b = 0; b < B; ++b) {
-        batch_index[b].set_size(static_cast<unsigned>(batch_sizes(b)));
-    }
-    for (int j = 0; j < N; ++j) {
-        unsigned b = batch_id(j);
-        batch_index[b](counters[b]++) = j;
+        int c = cov_of_batch[b];
+        for (int j = 0; j < N; ++j) {
+            if (batch_ids(c, j) == static_cast<arma::uword>(b)) {
+                batch_index[b](counters[b]++) = j;
+            }
+        }
     }
 }
 
@@ -186,7 +232,7 @@ void Harmony::init_cluster() {
 
     E = arma::sum(R, 1) * Pr_b.t();
     O.zeros();
-    scatter_add_O(R, batch_id, 1.0f);
+    scatter_add_O(R, batch_ids, 1.0f);
 
     compute_objective();
     objective_harmony.push_back(objective_kmeans.back());
@@ -253,7 +299,7 @@ void Harmony::cluster() {
         R.each_row() /= arma::sum(R, 0);
         E = arma::sum(R, 1) * Pr_b.t();
         O.zeros();
-        scatter_add_O(R, batch_id, 1.0f);
+        scatter_add_O(R, batch_ids, 1.0f);
     }
 
     int rounds = 0;
@@ -294,7 +340,8 @@ void Harmony::update_R() {
 
     R = R.cols(update_order);
     dist_mat = dist_mat.cols(update_order);
-    arma::uvec batch_id_shuf = batch_id.rows(update_order);
+    // Shuffle batch_ids (n_cov x N) by column order
+    arma::Mat<arma::uword> batch_ids_shuf = batch_ids.cols(update_order);
 
     for (unsigned i = 0; i < n_blocks; ++i) {
         unsigned idx_min = i * cells_per_block;
@@ -305,7 +352,7 @@ void Harmony::update_R() {
 
         auto Rcells = R.submat(0, idx_min, R.n_rows - 1, idx_max);
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
-        arma::uvec block_ids = batch_id_shuf.subvec(idx_min, idx_max);
+        arma::Mat<arma::uword> block_ids = batch_ids_shuf.cols(idx_min, idx_max);
 
         E -= arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, -1.0f);
@@ -315,12 +362,15 @@ void Harmony::update_R() {
         Rcells = arma::exp(Rcells);
         Rcells = arma::normalise(Rcells, 1, 0);
 
+        // Gather-multiply diversity for each covariate
         MATTYPE div_ratio = harmony_pow(((2*E) + 1) / (O + E + 1), theta);
-        for (unsigned j = 0; j < block_n; ++j) {
-            unsigned b = block_ids(j);
-            float* col = Rcells.colptr(j);
-            const float* src = div_ratio.colptr(b);
-            for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
+        for (int c = 0; c < n_covariates; ++c) {
+            for (unsigned j = 0; j < block_n; ++j) {
+                unsigned b = block_ids(c, j);
+                float* col = Rcells.colptr(j);
+                const float* src = div_ratio.colptr(b);
+                for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
+            }
         }
         Rcells = arma::normalise(Rcells, 1, 0);
 

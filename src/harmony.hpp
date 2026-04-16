@@ -3,7 +3,8 @@
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 //
 // harmony2 C++ backend — matches the R harmony2 package algorithm.
-// Uses float precision and minimal memory layout to match R package.
+// Uses custom scatter/gather kernels on a batch_id vector instead of
+// sparse Phi matrices, eliminating all sparse matrix overhead.
 
 #ifndef HARMONY_HPP
 #define HARMONY_HPP
@@ -17,10 +18,9 @@
 
 namespace harmony {
 
-// Match R package: all internal computation uses float
 typedef arma::Mat<float> MATTYPE;
-typedef arma::SpMat<float> SPMAT;
 typedef arma::Col<float> VECTYPE;
+typedef arma::Row<float> ROWTYPE;
 
 inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
     VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
@@ -39,21 +39,20 @@ MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
 
 class Harmony {
 public:
-    // Data matrices (d x N) — no separate Z_cos, Z_corr serves both roles
+    // Data matrices (d x N)
     MATTYPE Z_orig;
-    MATTYPE Z_corr;  // L2-normalized in-place; also holds corrected data
+    MATTYPE Z_corr;
 
-    // Batch structure — sparse matrices for BLAS-accelerated operations
-    SPMAT Phi;           // B x N batch indicator (sparse)
-    SPMAT Phi_t;         // N x B (transpose)
-    SPMAT Phi_moe;       // (B+1) x N — Phi with intercept row
-    SPMAT Phi_moe_t;     // N x (B+1)
-    VECTYPE Pr_b;
-    std::vector<arma::uvec> batch_index;  // B vectors of cell indices
+    // Batch structure — dense batch_id vector (N entries, each in [0, B))
+    // Replaces all sparse Phi matrices.
+    arma::uvec batch_id;                   // N: cell j -> batch index
+    VECTYPE Pr_b;                          // B: batch proportions
+    VECTYPE batch_sizes;                   // B: cells per batch
+    std::vector<arma::uvec> batch_index;   // B: cell indices per batch
 
     MATTYPE Y;           // d x K centroids
     MATTYPE R;           // K x N soft assignments
-    MATTYPE dist_mat;    // K x N distances — no separate _scale_dist
+    MATTYPE dist_mat;    // K x N distances
 
     MATTYPE O;           // K x B observed
     MATTYPE E;           // K x B expected
@@ -87,8 +86,8 @@ public:
     std::mt19937 rng;
 
     Harmony(
-        const arma::mat& Z,          // input as double from numpy
-        const arma::sp_mat& Phi,     // input as double from numpy
+        const arma::mat& Z,
+        const arma::sp_mat& Phi,
         const arma::vec& Pr_b,
         const arma::vec& sigma,
         const arma::vec& theta,
@@ -107,11 +106,10 @@ public:
         int ncores
     );
 
-    // Return as double for numpy
     arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_corr() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_orig() const { return arma::conv_to<arma::mat>::from(Z_orig); }
-    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(Z_corr); } // Z_corr IS Z_cos
+    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_R() const { return arma::conv_to<arma::mat>::from(R); }
     arma::mat get_Y() const { return arma::conv_to<arma::mat>::from(Y); }
 
@@ -126,6 +124,12 @@ public:
 private:
     void allocate_buffers();
     void build_batch_structures(const arma::sp_mat& Phi_in);
+
+    // Custom kernels replacing sparse Phi operations
+    // O[k,b] = sum_j R[k,j] for all j in batch b
+    void scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign);
+    // Multiply each column of A by the corresponding column of ratio[:, batch[j]]
+    void gather_multiply(MATTYPE& A, const MATTYPE& ratio, const arma::uvec& ids);
 };
 
 } // namespace harmony

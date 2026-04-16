@@ -108,10 +108,10 @@ sc.tl.leiden(adata)
 | `max_iter_harmony` | 10 | Maximum Harmony iterations |
 | `max_iter_kmeans` | 4 | K-means iterations per Harmony round |
 | `epsilon_harmony` | 1e-2 | Convergence threshold |
-| `ncores` | 1 | Parallel threads (macOS and Linux) |
+| `ncores` | 0 | BLAS threads (0 = all cores) |
 | `lamb` | None | Ridge penalty (None = auto-estimate) |
 
-Setting `ncores > 1` parallelizes scatter/gather kernels and per-batch ridge correction using `std::thread`. Works on both macOS and Linux — no OpenMP dependency.
+The `ncores` parameter controls BLAS threading (Accelerate on macOS, OpenBLAS on Linux). Default is 0 (use all available cores). Set `ncores=1` for single-threaded execution.
 
 
 ## Performance

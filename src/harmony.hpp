@@ -4,7 +4,7 @@
 //
 // harmony2 C++ backend — matches the R harmony2 package algorithm.
 // Uses custom scatter/gather kernels on a batch_id vector instead of
-// sparse Phi matrices, with std::thread parallelism (no OpenMP needed).
+// sparse Phi matrices, eliminating all sparse matrix overhead.
 
 #ifndef HARMONY_HPP
 #define HARMONY_HPP
@@ -15,36 +15,12 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <thread>
-#include <functional>
 
 namespace harmony {
 
 typedef arma::Mat<float> MATTYPE;
 typedef arma::Col<float> VECTYPE;
 typedef arma::Row<float> ROWTYPE;
-
-// Run func(start, end) in parallel across [0, n) using nthreads.
-// Each thread gets a contiguous chunk. Falls back to single-threaded
-// if nthreads <= 1 or n is small.
-inline void parallel_for(int n, int nthreads, std::function<void(int, int)> func) {
-    if (nthreads <= 1 || n < 1000) {
-        func(0, n);
-        return;
-    }
-    nthreads = std::min(nthreads, n);
-    std::vector<std::thread> threads(nthreads);
-    int chunk = (n + nthreads - 1) / nthreads;
-    for (int t = 0; t < nthreads; ++t) {
-        int start = t * chunk;
-        int end = std::min(start + chunk, n);
-        if (start >= end) { nthreads = t; break; }
-        threads[t] = std::thread(func, start, end);
-    }
-    for (int t = 0; t < nthreads; ++t) {
-        if (threads[t].joinable()) threads[t].join();
-    }
-}
 
 inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
     VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
@@ -92,7 +68,6 @@ public:
     float block_size;
     int window_size;
     bool verbose;
-    int ncores;
 
     std::vector<int> B_vec;
     std::vector<unsigned> covariate_bounds;
@@ -124,8 +99,7 @@ public:
         const std::vector<int>& B_vec,
         double batch_proportion_cutoff,
         bool verbose,
-        int random_state,
-        int ncores
+        int random_state
     );
 
     arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }
@@ -146,8 +120,6 @@ public:
 private:
     void allocate_buffers();
     void build_batch_structures(const arma::sp_mat& Phi_in);
-
-    // Scatter-add R columns into O by batch_id (thread-safe with partitioning)
     void scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign);
 };
 

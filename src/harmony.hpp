@@ -4,7 +4,7 @@
 //
 // harmony2 C++ backend — matches the R harmony2 package algorithm.
 // Uses custom scatter/gather kernels on a batch_id vector instead of
-// sparse Phi matrices, eliminating all sparse matrix overhead.
+// sparse Phi matrices, with std::thread parallelism (no OpenMP needed).
 
 #ifndef HARMONY_HPP
 #define HARMONY_HPP
@@ -15,12 +15,36 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <thread>
+#include <functional>
 
 namespace harmony {
 
 typedef arma::Mat<float> MATTYPE;
 typedef arma::Col<float> VECTYPE;
 typedef arma::Row<float> ROWTYPE;
+
+// Run func(start, end) in parallel across [0, n) using nthreads.
+// Each thread gets a contiguous chunk. Falls back to single-threaded
+// if nthreads <= 1 or n is small.
+inline void parallel_for(int n, int nthreads, std::function<void(int, int)> func) {
+    if (nthreads <= 1 || n < 1000) {
+        func(0, n);
+        return;
+    }
+    nthreads = std::min(nthreads, n);
+    std::vector<std::thread> threads(nthreads);
+    int chunk = (n + nthreads - 1) / nthreads;
+    for (int t = 0; t < nthreads; ++t) {
+        int start = t * chunk;
+        int end = std::min(start + chunk, n);
+        if (start >= end) { nthreads = t; break; }
+        threads[t] = std::thread(func, start, end);
+    }
+    for (int t = 0; t < nthreads; ++t) {
+        if (threads[t].joinable()) threads[t].join();
+    }
+}
 
 inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
     VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
@@ -39,28 +63,25 @@ MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
 
 class Harmony {
 public:
-    // Data matrices (d x N)
     MATTYPE Z_orig;
     MATTYPE Z_corr;
 
-    // Batch structure — dense batch_id vector (N entries, each in [0, B))
-    // Replaces all sparse Phi matrices.
-    arma::uvec batch_id;                   // N: cell j -> batch index
-    VECTYPE Pr_b;                          // B: batch proportions
-    VECTYPE batch_sizes;                   // B: cells per batch
-    std::vector<arma::uvec> batch_index;   // B: cell indices per batch
+    arma::uvec batch_id;
+    VECTYPE Pr_b;
+    VECTYPE batch_sizes;
+    std::vector<arma::uvec> batch_index;
 
-    MATTYPE Y;           // d x K centroids
-    MATTYPE R;           // K x N soft assignments
-    MATTYPE dist_mat;    // K x N distances
+    MATTYPE Y;
+    MATTYPE R;
+    MATTYPE dist_mat;
 
-    MATTYPE O;           // K x B observed
-    MATTYPE E;           // K x B expected
-    MATTYPE W;           // (B+1) x d ridge weights
+    MATTYPE O;
+    MATTYPE E;
+    MATTYPE W;
 
-    VECTYPE sigma;       // K
-    VECTYPE theta;       // B
-    VECTYPE lambda;      // B+1
+    VECTYPE sigma;
+    VECTYPE theta;
+    VECTYPE lambda;
 
     float alpha;
     bool lambda_estimation;
@@ -71,6 +92,7 @@ public:
     float block_size;
     int window_size;
     bool verbose;
+    int ncores;
 
     std::vector<int> B_vec;
     std::vector<unsigned> covariate_bounds;
@@ -125,11 +147,8 @@ private:
     void allocate_buffers();
     void build_batch_structures(const arma::sp_mat& Phi_in);
 
-    // Custom kernels replacing sparse Phi operations
-    // O[k,b] = sum_j R[k,j] for all j in batch b
+    // Scatter-add R columns into O by batch_id (thread-safe with partitioning)
     void scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign);
-    // Multiply each column of A by the corresponding column of ratio[:, batch[j]]
-    void gather_multiply(MATTYPE& A, const MATTYPE& ratio, const arma::uvec& ids);
 };
 
 } // namespace harmony

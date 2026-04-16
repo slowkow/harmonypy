@@ -38,25 +38,15 @@ arma::vec numpy_to_arma_vec(NpDouble1D arr) {
     return result;
 }
 
-// Build sparse Phi (B x N) from batch_of_cell (n_cov x N, int64)
-// Each cell has one non-zero per covariate row, at its batch index.
-arma::sp_mat build_sparse_phi(NpInt64_2D batch_of_cell, int B) {
-    size_t n_cov = batch_of_cell.shape(0);
-    size_t N = batch_of_cell.shape(1);
-    const int64_t* ptr = batch_of_cell.data();
-
-    // Collect (row, col) locations
-    size_t nnz = n_cov * N;
-    arma::umat locations(2, nnz);
-    arma::vec values(nnz, arma::fill::ones);
-    for (size_t c = 0; c < n_cov; ++c) {
-        for (size_t j = 0; j < N; ++j) {
-            size_t idx = c * N + j;
-            locations(0, idx) = static_cast<arma::uword>(ptr[c * N + j]);
-            locations(1, idx) = static_cast<arma::uword>(j);
-        }
-    }
-    return arma::sp_mat(locations, values, B, N);
+// Convert NumPy 2D int64 array to Armadillo int64 matrix (row-major → col-major)
+arma::Mat<int64_t> numpy_to_arma_imat(NpInt64_2D arr) {
+    size_t nrows = arr.shape(0), ncols = arr.shape(1);
+    const int64_t* ptr = arr.data();
+    arma::Mat<int64_t> result(nrows, ncols);
+    for (size_t i = 0; i < nrows; ++i)
+        for (size_t j = 0; j < ncols; ++j)
+            result(i, j) = ptr[i * ncols + j];
+    return result;
 }
 
 // Convert Armadillo matrix to NumPy array (returns owned memory via capsule)
@@ -96,12 +86,9 @@ public:
         bool verbose,
         int random_state
     ) {
-        int B = 0;
-        for (auto v : B_vec) B += v;
-
         harmony = std::make_unique<Harmony>(
             numpy_to_arma_mat(Z),
-            build_sparse_phi(batch_of_cell, B),
+            numpy_to_arma_imat(batch_of_cell),
             numpy_to_arma_vec(Pr_b),
             numpy_to_arma_vec(sigma),
             numpy_to_arma_vec(theta),

@@ -42,7 +42,8 @@ public:
     MATTYPE Z_orig;
     MATTYPE Z_corr;
 
-    arma::uvec batch_id;
+    arma::Mat<arma::uword> batch_ids;   // n_cov x N: batch index per covariate
+    int n_covariates;
     VECTYPE Pr_b;
     VECTYPE batch_sizes;
     std::vector<arma::uvec> batch_index;
@@ -84,7 +85,7 @@ public:
 
     Harmony(
         const arma::mat& Z,
-        const arma::sp_mat& Phi,
+        const arma::Mat<int64_t>& batch_of_cell,  // n_cov x N
         const arma::vec& Pr_b,
         const arma::vec& sigma,
         const arma::vec& theta,
@@ -119,8 +120,8 @@ public:
 
 private:
     void allocate_buffers();
-    void build_batch_structures(const arma::sp_mat& Phi_in);
-    void scatter_add_O(const MATTYPE& Rsub, const arma::uvec& ids, float sign);
+    void build_batch_structures(const arma::Mat<int64_t>& batch_of_cell);
+    void scatter_add_O(const MATTYPE& Rsub, const arma::Mat<arma::uword>& ids, float sign);
 };
 
 } // namespace harmony

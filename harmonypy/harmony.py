@@ -132,8 +132,8 @@ def run_harmony(
     if isinstance(vars_use, str):
         vars_use = [vars_use]
 
-    # Build compact batch-of-cell index (n_covariates x N, int64)
-    # instead of dense B x N one-hot matrix — O(N) vs O(B*N) memory
+    # Build compact batch-of-cell index (n_covariates x N, int64).
+    # Passed directly to C++ — no sparse Phi construction needed.
     batch_of_cell = np.empty((len(vars_use), N), dtype=np.int64)
     phi_n = np.empty(len(vars_use), dtype=int)
     offset = 0

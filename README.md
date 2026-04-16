@@ -121,9 +121,9 @@ The script in `tests/test_harmony.py` on an Apple M1 (2022) chip reports:
 ```
   Dataset                    Time    RSS delta
   ---------------------- -------- ------------
-  Small (3.5k cells)        0.74s     66.3 MB
-  Medium (69k cells)       20.15s    321.6 MB
-  Large (858k cells)       38.38s   2519.1 MB
+  Small (3.5k cells)        0.23s     45.2 MB
+  Medium (69k cells)        4.76s    262.3 MB
+  Large (858k cells)       29.29s   1969.5 MB
 ```
 
 

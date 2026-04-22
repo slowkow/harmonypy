@@ -1,4 +1,4 @@
-# 2.0.0 - 2026-04-16
+# 2.0.0 - 2026-04-22
 
 Complete rewrite with C++ backend ([Armadillo](https://arma.sourceforge.net/) +
 [nanobind](https://github.com/wjakob/nanobind)), matching the

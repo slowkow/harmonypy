@@ -1,9 +1,9 @@
-We use [hatch] to develop harmonypy.
+We use [uv] to develop harmonypy.
 
 Copy the harmonypy code to your computer:
 
 ```
-git clone https://github.com/slowkow/harmonpy
+git clone https://github.com/slowkow/harmonypy
 ```
 
 Then change to the newly created directory:
@@ -12,54 +12,34 @@ Then change to the newly created directory:
 cd harmonypy
 ```
 
-Install hatch:
+Install uv:
 
 ```
-pipx install hatch
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Create a new environment just for harmonypy:
+Create a virtual environment and install harmonypy in editable mode with test
+dependencies:
 
 ```
-hatch env create
+uv venv
+uv pip install -e ".[test]"
 ```
 
-Once we have hatch and an environment, then we can enter a new shell:
+Run the tests:
 
 ```
-hatch shell
+uv run pytest tests/test_harmony.py -v
 ```
 
-In this environment, we can run tests:
+Build the wheel:
 
 ```
-hatch test
+uv pip install build
+python -m build
 ```
 
-And we can also build the files needed for PyPI:
+Wheels are published to PyPI automatically via GitHub Actions when a new
+release is created on GitHub. See `.github/workflows/release.yml`.
 
-```
-hatch build
-```
-
-We should double-check that the contents of the `.tar.gz` file do not include any files we do not want to publish:
-
-```
-tar tvf dist/harmonypy-0.0.10.tar.gz
--rw-r--r--  0 0      0          97 Feb  1  2020 harmonypy-0.0.10/harmonypy/__init__.py
--rw-r--r--  0 0      0       12783 Feb  1  2020 harmonypy-0.0.10/harmonypy/harmony.py
--rw-r--r--  0 0      0        4559 Feb  1  2020 harmonypy-0.0.10/harmonypy/lisi.py
--rw-r--r--  0 0      0        1824 Feb  1  2020 harmonypy-0.0.10/.gitignore
--rw-r--r--  0 0      0       35149 Feb  1  2020 harmonypy-0.0.10/LICENSE
--rw-r--r--  0 0      0        3126 Feb  1  2020 harmonypy-0.0.10/README.md
--rw-r--r--  0 0      0        1026 Feb  1  2020 harmonypy-0.0.10/pyproject.toml
-```
-
-When we're ready, we can publish to PyPI:
-
-```
-hatch publish
-```
-
-[hatch]: https://hatch.pypa.io
-
+[uv]: https://docs.astral.sh/uv/

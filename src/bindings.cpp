@@ -6,6 +6,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/string.h>
 #include "harmony.hpp"
 #include "lisi.hpp"
 
@@ -84,7 +86,8 @@ public:
         std::vector<int> B_vec,
         double batch_proportion_cutoff,
         bool verbose,
-        int random_state
+        int random_state,
+        std::function<void(const std::string&)> log_fn
     ) {
         harmony = std::make_unique<Harmony>(
             numpy_to_arma_mat(Z),
@@ -103,7 +106,8 @@ public:
             B_vec,
             batch_proportion_cutoff,
             verbose,
-            random_state
+            random_state,
+            std::move(log_fn)
         );
     }
 
@@ -146,7 +150,8 @@ NB_MODULE(_harmony_cpp, m) {
             std::vector<int>,      // B_vec
             double,                // batch_proportion_cutoff
             bool,                  // verbose
-            int                    // random_state
+            int,                   // random_state
+            std::function<void(const std::string&)>  // log_fn
         >(),
             nb::arg("Z"),
             nb::arg("batch_of_cell"),
@@ -164,7 +169,8 @@ NB_MODULE(_harmony_cpp, m) {
             nb::arg("B_vec"),
             nb::arg("batch_proportion_cutoff"),
             nb::arg("verbose"),
-            nb::arg("random_state")
+            nb::arg("random_state"),
+            nb::arg("log_fn")
         )
         .def("result", &HarmonyWrapper::result, nb::rv_policy::move,
              "Get the corrected data matrix")

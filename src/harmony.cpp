@@ -9,6 +9,7 @@
 #include "harmony.hpp"
 #include <numeric>
 #include <set>
+#include <sstream>
 
 namespace harmony {
 
@@ -96,7 +97,8 @@ Harmony::Harmony(
     const std::vector<int>& B_vec_in,
     double batch_proportion_cutoff,
     bool verbose,
-    int random_state
+    int random_state,
+    std::function<void(const std::string&)> log_fn_in
 ) : max_iter_harmony(max_iter_harmony),
     max_iter_kmeans(max_iter_kmeans),
     epsilon_kmeans(static_cast<float>(epsilon_kmeans)),
@@ -108,6 +110,7 @@ Harmony::Harmony(
     alpha(static_cast<float>(alpha_in)),
     batch_proportion_cutoff(static_cast<float>(batch_proportion_cutoff)),
     B_vec(B_vec_in),
+    log_fn(std::move(log_fn_in)),
     rng(random_state)
 {
     Z_orig = arma::conv_to<MATTYPE>::from(Z);
@@ -140,9 +143,9 @@ Harmony::Harmony(
     build_batch_structures(batch_of_cell);
     allocate_buffers();
 
-    if (verbose) std::cout << "Computing initial centroids..." << std::endl;
+    if (verbose && log_fn) log_fn("Computing initial centroids...");
     init_cluster();
-    if (verbose) std::cout << "Initialization complete." << std::endl;
+    if (verbose && log_fn) log_fn("Initialization complete.");
     harmonize(max_iter_harmony, verbose);
 }
 
@@ -271,22 +274,28 @@ void Harmony::compute_objective() {
 void Harmony::harmonize(int iter_harmony, bool verbose_flag) {
     bool converged = false;
     for (int i = 1; i <= iter_harmony; ++i) {
-        if (verbose_flag)
-            std::cout << "Iteration " << i << " of " << iter_harmony << std::endl;
+        if (verbose_flag && log_fn) {
+            std::ostringstream oss;
+            oss << "Iteration " << i << " of " << iter_harmony;
+            log_fn(oss.str());
+        }
 
         cluster();
         moe_correct_ridge();
 
         converged = check_convergence(1);
         if (converged) {
-            if (verbose_flag)
-                std::cout << "Converged after " << i << " iteration"
-                          << (i > 1 ? "s" : "") << std::endl;
+            if (verbose_flag && log_fn) {
+                std::ostringstream oss;
+                oss << "Converged after " << i << " iteration"
+                    << (i > 1 ? "s" : "");
+                log_fn(oss.str());
+            }
             break;
         }
     }
-    if (verbose_flag && !converged)
-        std::cout << "Stopped before convergence" << std::endl;
+    if (verbose_flag && !converged && log_fn)
+        log_fn("Stopped before convergence");
 }
 
 void Harmony::cluster() {

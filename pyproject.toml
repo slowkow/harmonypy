@@ -63,7 +63,7 @@ test-command = "mkdir -p /tmp/hptest && cp -r {project}/tests {project}/data /tm
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
-before-all = "yum install -y openblas-devel lapack-devel || dnf install -y openblas-devel lapack-devel"
+before-all = "yum install -y epel-release && yum install -y openblas-devel lapack-devel || apk add openblas-dev lapack-dev"
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]

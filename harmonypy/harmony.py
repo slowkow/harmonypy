@@ -234,7 +234,8 @@ def run_harmony(
         phi_n.tolist(),
         float(batch_prop_cutoff),
         verbose,
-        random_state if random_state is not None else 0
+        random_state if random_state is not None else 0,
+        logger.info,
     )
     return Harmony(cpp_harmony)
 

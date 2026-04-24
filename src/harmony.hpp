@@ -14,7 +14,7 @@
 #include <random>
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+#include <functional>
 
 namespace harmony {
 
@@ -81,6 +81,9 @@ public:
     std::vector<float> objective_kmeans_cross;
     std::vector<int> kmeans_rounds;
 
+    // Callback for progress messages (set from Python to go through logging)
+    std::function<void(const std::string&)> log_fn;
+
     std::mt19937 rng;
 
     Harmony(
@@ -100,7 +103,8 @@ public:
         const std::vector<int>& B_vec,
         double batch_proportion_cutoff,
         bool verbose,
-        int random_state
+        int random_state,
+        std::function<void(const std::string&)> log_fn = nullptr
     );
 
     arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }

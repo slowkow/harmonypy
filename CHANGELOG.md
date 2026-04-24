@@ -20,6 +20,10 @@ Complete rewrite with C++ backend ([Armadillo](https://arma.sourceforge.net/) +
 - Accepts pandas DataFrame, dict of arrays, or NumPy array for `meta_data`.
 - Non-numeric DataFrame columns (e.g. barcodes) are dropped automatically.
 - Stricter input validation with clear error messages for shape mismatches.
+- C++ progress messages (e.g. "Iteration 1 of 10") now go through Python's
+  `logging` module instead of `std::cout`, so they appear immediately and
+  integrate with downstream packages' logging configuration. Thanks to
+  Yakir Reshef (@yakirr) for reporting this.
 
 ### Breaking changes
 - `lamb` now defaults to automatic lambda estimation (was fixed `1`).

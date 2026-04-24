@@ -1,5 +1,8 @@
 name: Build and publish wheels
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   # Build wheels on every push to master (but don't publish)
   push:

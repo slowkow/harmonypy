@@ -10,26 +10,26 @@
 #   Rscript scripts/generate_harmony2_reference.R
 
 library(harmony)
+library(data.table)
 
 cat("harmony version:", as.character(packageVersion("harmony")), "\n")
 
 generate_reference <- function(meta_tsv, pcs_tsv, output_tsv, batch_var) {
     cat("\n--- Processing:", meta_tsv, "---\n")
 
-    meta <- read.delim(meta_tsv)
-    pcs <- read.delim(pcs_tsv, check.names = FALSE)
+    meta <- fread(meta_tsv)
+    pcs <- fread(pcs_tsv)
 
-    # Drop row names column if present
-    if (is.character(pcs[[1]])) {
-        rownames(pcs) <- pcs[[1]]
-        pcs <- pcs[, -1]
-    }
+    # Keep only columns named PC1, PC2, ...
+    pc_cols <- grep("^PC\\d+$", names(pcs), value = TRUE)
+    pcs <- pcs[, ..pc_cols]
 
     cat("Cells:", nrow(pcs), " PCs:", ncol(pcs), "\n")
     cat("Batch variable:", batch_var, "\n")
     cat("Batch levels:", paste(unique(meta[[batch_var]]), collapse = ", "), "\n")
 
     # RunHarmony expects cells in rows; it will transpose internally
+    t0 <- proc.time()
     result <- RunHarmony(
         as.matrix(pcs),
         meta,
@@ -37,15 +37,15 @@ generate_reference <- function(meta_tsv, pcs_tsv, output_tsv, batch_var) {
         verbose = TRUE,
         return_object = FALSE
     )
+    elapsed <- (proc.time() - t0)["elapsed"]
+    cat("Elapsed:", elapsed, "seconds\n")
 
     cat("Result shape:", nrow(result), "x", ncol(result), "\n")
 
-    write.table(
-        result,
-        gzfile(output_tsv),
-        sep = "\t",
-        quote = FALSE,
-        row.names = TRUE
+    fwrite(
+        as.data.table(result),
+        output_tsv,
+        sep = "\t"
     )
     cat("Saved:", output_tsv, "\n")
 }

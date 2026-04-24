@@ -16,10 +16,17 @@ from time import time
 
 import numpy as np
 import pandas as pd
-from scipy.stats import pearsonr
 import os
 import sys
 import harmonypy as hm
+
+
+def pearsonr(x, y):
+    """Pearson correlation coefficient (no scipy dependency)."""
+    xm = x - x.mean()
+    ym = y - y.mean()
+    r = np.dot(xm, ym) / (np.linalg.norm(xm) * np.linalg.norm(ym))
+    return r
 
 
 def _get_current_rss_mb():
@@ -169,11 +176,9 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print("\n--- Comparison with R Results ---")
     print(f"Expected result shape: {harm.shape}")
 
-    cors = []
+    cors_values = []
     for i in range(res.shape[1]):
-        cors.append(pearsonr(res.iloc[:, i].values, harm.iloc[:, i].values))
-    
-    cors_values = [x[0] for x in cors]
+        cors_values.append(pearsonr(res.iloc[:, i].values, harm.iloc[:, i].values))
     print(f"Correlations (Python vs R) per PC: {[f'{x:.3f}' for x in cors_values]}")
     print(f"Min correlation: {min(cors_values):.3f}")
     print(f"Mean correlation: {np.mean(cors_values):.3f}")

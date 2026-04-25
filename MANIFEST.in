@@ -1,4 +1,6 @@
 include README.md
 prune data*
 prune tests*
+prune scripts*
+prune figures*
 exclude MANIFEST.in

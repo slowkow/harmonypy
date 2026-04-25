@@ -48,6 +48,7 @@ Changelog = "https://github.com/slowkow/harmonypy/blob/master/CHANGELOG.md"
 
 [tool.scikit-build]
 wheel.packages = ["harmonypy"]
+sdist.exclude = ["scripts", "figures", "data", "tests", ".claude", ".cursor", ".github"]
 build.verbose = true
 build-dir = "/tmp/harmonypy-build/{wheel_tag}"
 ninja.make-fallback = true

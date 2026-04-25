@@ -14,8 +14,9 @@ The medium and large data will be downloaded automatically.
 """
 from time import time
 
+import csv
+import gzip
 import numpy as np
-import pandas as pd
 import os
 import sys
 import harmonypy as hm
@@ -27,6 +28,35 @@ def pearsonr(x, y):
     ym = y - y.mean()
     r = np.dot(xm, ym) / (np.linalg.norm(xm) * np.linalg.norm(ym))
     return r
+
+
+def read_tsv(path):
+    """Read a TSV file, return (header, columns_dict).
+
+    Numeric columns are returned as float64 arrays.
+    Non-numeric columns are returned as string arrays.
+    """
+    with gzip.open(path, "rt") if path.endswith(".gz") else open(path) as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader)
+        rows = list(reader)
+    cols = {}
+    for i, name in enumerate(header):
+        values = [row[i] for row in rows]
+        try:
+            cols[name] = np.array(values, dtype=np.float64)
+        except ValueError:
+            cols[name] = np.array(values)
+    return header, cols
+
+
+def cols_to_matrix(cols, header):
+    """Extract numeric columns into a matrix (N x d)."""
+    numeric = []
+    for name in header:
+        if cols[name].dtype == np.float64:
+            numeric.append(cols[name])
+    return np.column_stack(numeric)
 
 
 def _get_current_rss_mb():
@@ -89,12 +119,13 @@ def test_random_seed():
     print("TEST: test_random_seed")
     print("=" * 60)
 
-    meta_data = pd.read_csv("data/pbmc_3500_meta.tsv.gz", sep="\t")
-    data_mat = pd.read_csv("data/pbmc_3500_pcs.tsv.gz", sep="\t")
+    _, meta_cols = read_tsv("data/pbmc_3500_meta.tsv.gz")
+    _, pcs_cols = read_tsv("data/pbmc_3500_pcs.tsv.gz")
+    data_mat = cols_to_matrix(pcs_cols, list(pcs_cols.keys()))
 
     def run(random_state):
         ho = hm.run_harmony(data_mat,
-                            meta_data, ['donor'],
+                            meta_cols, ['donor'],
                             max_iter_harmony=2,
                             max_iter_kmeans=2,
                             verbose=False,
@@ -102,14 +133,13 @@ def test_random_seed():
         return ho.Z_corr
 
     # Assert same results when random_state is set.
-    # Note: MPS (Apple Silicon) has slight non-determinism, so we use relaxed tolerance
     print("\n--- Testing reproducibility with random_state=42 ---")
     result1 = run(42)
     result2 = run(42)
     diff_same_seed = np.abs(result1 - result2).sum()
     print(f"Difference between two runs with same seed: {diff_same_seed:.6f}")
     np.testing.assert_allclose(result1, result2, rtol=1e-3, atol=1e-4)
-    print("✓ Same seed produces similar results (PASSED)")
+    print("PASSED: Same seed produces similar results")
 
     # Assert different values when random_state is different
     print("\n--- Testing variability with different seeds ---")
@@ -118,7 +148,7 @@ def test_random_seed():
     diff_diff_seed = np.abs(result3 - result4).sum()
     print(f"Difference between runs with different seeds: {diff_diff_seed:.2f}")
     assert diff_diff_seed > 1000, f"Expected diff > 1000, got {diff_diff_seed}"
-    print("✓ Different seeds produce different results (PASSED)")
+    print("PASSED: Different seeds produce different results")
 
 
 def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
@@ -130,27 +160,27 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
         return {"time": 0, "rss_delta_mb": 0}
 
     # Load input data
-    meta_data = pd.read_csv(meta_tsv, sep="\t", low_memory=False)
-    data_mat = pd.read_csv(pcs_tsv, sep="\t", low_memory=False)
-    data_mat = data_mat.select_dtypes(include=[np.number])
+    meta_header, meta_cols = read_tsv(meta_tsv)
+    pcs_header, pcs_cols = read_tsv(pcs_tsv)
+    data_mat = cols_to_matrix(pcs_cols, pcs_header)
 
+    N = len(meta_cols[batch_var])
+    unique_batches = np.unique(meta_cols[batch_var])
     print("\n--- Input Data ---")
-    print(f"data_mat shape: {data_mat.shape} (cells × PCs)")
-    print(f"meta_data shape: {meta_data.shape}")
-    print(f"meta_data columns: {list(meta_data.columns)[:10]}...")
-    print(f"Batch variable '{batch_var}' unique values: {meta_data[batch_var].unique()}")
-    print(f"Cells per {batch_var}:\n{meta_data[batch_var].value_counts()}")
+    print(f"data_mat shape: {data_mat.shape} (cells x PCs)")
+    print(f"meta_data columns: {meta_header}")
+    print(f"Batch variable '{batch_var}' unique values: {unique_batches}")
 
     print("\n--- Running Harmony ---")
-    import gc, sys
+    import gc
     gc.collect()
     rss_before = _get_current_rss_mb()
     start = time()
-    ho = hm.run_harmony(data_mat, meta_data, [batch_var])
+    ho = hm.run_harmony(data_mat, meta_cols, [batch_var])
     end = time()
     rss_after = _get_current_rss_mb()
     rss_delta_mb = rss_after - rss_before
-    print(f"\n✓ Harmony completed in {end - start:.2f} seconds")
+    print(f"\nHarmony completed in {end - start:.2f} seconds")
     print(f"  RSS before: {rss_before:.1f} MB")
     print(f"  RSS after:  {rss_after:.1f} MB")
     print(f"  RSS delta:  {rss_delta_mb:.1f} MB")
@@ -159,34 +189,32 @@ def run_harmony(meta_tsv, pcs_tsv, harmonized_tsv, batch_var):
     print(f"Number of clusters (K): {ho.K}")
     print(f"Number of harmony iterations: {len(ho.objective_harmony)}")
     print(f"K-means rounds per iteration: {ho.kmeans_rounds}")
-    print(f"Z_corr shape: {ho.Z_corr.shape} (cells × PCs)")
+    print(f"Z_corr shape: {ho.Z_corr.shape} (cells x PCs)")
     print(f"Z_orig shape: {ho.Z_orig.shape}")
 
     # Check convergence
     print("\n--- Convergence ---")
     print(f"Objective (harmony) history: {[f'{x:.2f}' for x in ho.objective_harmony]}")
 
-    # Z_corr is now cells × PCs (same as input)
-    res = pd.DataFrame(ho.Z_corr)
-    res.columns = ['PC{}'.format(i + 1) for i in range(res.shape[1])]
-
     # Compare to expected results from R
-    harm = pd.read_csv(harmonized_tsv, sep="\t")
-    harm = harm.select_dtypes(include=[np.number])
+    res = ho.Z_corr  # cells x PCs
+    harm_header, harm_cols = read_tsv(harmonized_tsv)
+    harm = cols_to_matrix(harm_cols, harm_header)
     print("\n--- Comparison with R Results ---")
     print(f"Expected result shape: {harm.shape}")
 
+    n_pcs = min(res.shape[1], harm.shape[1])
     cors_values = []
-    for i in range(res.shape[1]):
-        cors_values.append(pearsonr(res.iloc[:, i].values, harm.iloc[:, i].values))
+    for i in range(n_pcs):
+        cors_values.append(pearsonr(res[:, i], harm[:, i]))
     print(f"Correlations (Python vs R) per PC: {[f'{x:.3f}' for x in cors_values]}")
     print(f"Min correlation: {min(cors_values):.3f}")
     print(f"Mean correlation: {np.mean(cors_values):.3f}")
 
     # Correlation between test PCs and observed PCs is high
     assert np.all(np.array(cors_values) >= 0.9), f"Some correlations < 0.9: {cors_values}"
-    print("✓ All correlations >= 0.9 (PASSED)")
-    
+    print("PASSED: All correlations >= 0.9")
+
     return {"time": end - start, "rss_delta_mb": rss_delta_mb}
 
 
@@ -211,34 +239,34 @@ if __name__ == "__main__":
     print("# Running harmonypy tests")
     print("#" * 60)
     print()
-    
+
     timings = {}
 
     download_data()
-    
+
     timings['small'] = run_harmony(
         meta_tsv="data/pbmc_3500_meta.tsv.gz",
         pcs_tsv="data/pbmc_3500_pcs.tsv.gz",
         harmonized_tsv="data/pbmc_3500_pcs_harmonized.tsv.gz",
         batch_var="donor"
     )
-    
+
     timings['medium'] = run_harmony(
         meta_tsv="data/ircolitis_blood_cd8_obs.tsv.gz",
         pcs_tsv="data/ircolitis_blood_cd8_pcs.tsv.gz",
         harmonized_tsv="data/ircolitis_blood_cd8_pcs_harmonized.tsv.gz",
         batch_var="batch"
     )
-    
+
     timings['large'] = run_harmony(
         meta_tsv="data/acute_myeloid_obs.tsv.gz",
         pcs_tsv="data/acute_myeloid_pcs.tsv.gz",
         harmonized_tsv="data/acute_myeloid_pcs_harmonized.tsv.gz",
         batch_var="batch"
     )
-    
+
     test_random_seed()
-    
+
     print("\n" + "#" * 60)
     print("# Performance Summary")
     print("#" * 60)

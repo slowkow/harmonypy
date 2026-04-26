@@ -26,6 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
@@ -57,7 +58,7 @@ ninja.make-fallback = true
 CMAKE_BUILD_TYPE = "Release"
 
 [tool.cibuildwheel]
-build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* *-win32 *-manylinux_i686"
 test-requires = ["pytest"]
 test-command = "mkdir -p /tmp/hptest/data && cp -r {project}/tests /tmp/hptest/ && cp {project}/data/pbmc_3500_*.tsv.gz /tmp/hptest/data/ && cd /tmp/hptest && pytest tests/test_harmony.py::test_run_harmony_small -v"

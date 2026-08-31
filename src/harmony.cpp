@@ -13,6 +13,15 @@
 
 namespace harmony {
 
+bool objective_converged(float obj_old, float obj_new, float epsilon) {
+    if (!std::isfinite(obj_old) || !std::isfinite(obj_new) || !std::isfinite(epsilon))
+        return false;
+    if (obj_old == 0.0f) return obj_new == 0.0f;
+
+    float delta = (obj_old - obj_new) / std::abs(obj_old);
+    return delta >= 0.0f && delta < epsilon;
+}
+
 // =========================================================================
 // Custom kernels
 // =========================================================================
@@ -413,7 +422,7 @@ bool Harmony::check_convergence(int i_type) {
         if (objective_harmony.size() < 2) return false;
         float obj_old = objective_harmony[objective_harmony.size() - 2];
         float obj_new = objective_harmony[objective_harmony.size() - 1];
-        return (obj_old - obj_new) / std::abs(obj_old) < epsilon_harmony;
+        return objective_converged(obj_old, obj_new, epsilon_harmony);
     }
     return true;
 }

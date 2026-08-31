@@ -36,6 +36,7 @@ inline MATTYPE harmony_pow(MATTYPE A, const VECTYPE& T) {
 }
 
 MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
+bool objective_converged(float obj_old, float obj_new, float epsilon);
 
 class Harmony {
 public:

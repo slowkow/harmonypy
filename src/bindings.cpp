@@ -132,6 +132,9 @@ public:
 NB_MODULE(_harmony_cpp, m) {
     m.doc() = "C++ implementation of Harmony algorithm (matches R package)";
 
+    m.def("_objective_converged", &objective_converged,
+          nb::arg("obj_old"), nb::arg("obj_new"), nb::arg("epsilon"));
+
     nb::class_<HarmonyWrapper>(m, "HarmonyCpp")
         .def(nb::init<
             NpDouble2D,            // Z

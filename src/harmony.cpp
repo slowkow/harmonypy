@@ -10,6 +10,7 @@
 #include <numeric>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 
 namespace harmony {
 
@@ -20,6 +21,49 @@ bool objective_converged(float obj_old, float obj_new, float epsilon) {
 
     float delta = (obj_old - obj_new) / std::abs(obj_old);
     return delta >= 0.0f && delta < epsilon;
+}
+
+[[noreturn]] void Harmony::numerical_error(const char* stage, const char* invariant) const {
+    std::ostringstream oss;
+    oss << "Harmony numerical error during " << stage << ": " << invariant
+        << " (sigma=[";
+    for (arma::uword i = 0; i < sigma.n_elem; ++i) {
+        if (i > 0) oss << ", ";
+        oss << sigma(i);
+    }
+    oss << "], theta=[";
+    for (arma::uword i = 0; i < theta.n_elem; ++i) {
+        if (i > 0) oss << ", ";
+        oss << theta(i);
+    }
+    oss << "], block_size=" << block_size << ", K=" << K << ", N=" << N << ")";
+    throw std::runtime_error(oss.str());
+}
+
+void Harmony::check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const {
+    if (!normalizers.is_finite() || normalizers.min() <= 0.0f)
+        numerical_error(stage, "assignment normalizers must be finite and positive");
+}
+
+void Harmony::check_state(const char* stage) const {
+    if (!R.is_finite()) numerical_error(stage, "assignments must be finite");
+    if (R.min() < 0.0f) numerical_error(stage, "assignments must be nonnegative");
+
+    ROWTYPE assignment_sums = arma::sum(R, 0);
+    if (!assignment_sums.is_finite() || arma::abs(assignment_sums - 1.0f).max() > 1e-4f)
+        numerical_error(stage, "assignment columns must sum to one");
+
+    auto all_finite = [](const std::vector<float>& values) {
+        return std::all_of(values.begin(), values.end(), [](float value) {
+            return std::isfinite(value);
+        });
+    };
+    if (!all_finite(objective_harmony) || !all_finite(objective_kmeans) ||
+        !all_finite(objective_kmeans_dist) || !all_finite(objective_kmeans_entropy) ||
+        !all_finite(objective_kmeans_cross))
+        numerical_error(stage, "objectives must be finite");
+
+    if (!Z_corr.is_finite()) numerical_error(stage, "corrected coordinates must be finite");
 }
 
 // =========================================================================
@@ -154,8 +198,10 @@ Harmony::Harmony(
 
     if (verbose && log_fn) log_fn("Computing initial centroids...");
     init_cluster();
+    check_state("initialization");
     if (verbose && log_fn) log_fn("Initialization complete.");
     harmonize(max_iter_harmony, verbose);
+    check_state("return");
 }
 
 void Harmony::build_batch_structures(const arma::Mat<int64_t>& batch_of_cell) {
@@ -240,7 +286,9 @@ void Harmony::init_cluster() {
     R = -dist_mat;
     R.each_col() /= sigma;
     R = arma::exp(R);
-    R.each_row() /= arma::sum(R, 0);
+    ROWTYPE normalizers = arma::sum(R, 0);
+    check_assignment_normalizers(normalizers, "initialization");
+    R.each_row() /= normalizers;
 
     E = arma::sum(R, 1) * Pr_b.t();
     O.zeros();
@@ -314,7 +362,9 @@ void Harmony::cluster() {
         R = -dist_mat;
         R.each_col() /= sigma;
         R = arma::exp(R);
-        R.each_row() /= arma::sum(R, 0);
+        ROWTYPE normalizers = arma::sum(R, 0);
+        check_assignment_normalizers(normalizers, "cluster initialization");
+        R.each_row() /= normalizers;
         E = arma::sum(R, 1) * Pr_b.t();
         O.zeros();
         scatter_add_O(R, batch_ids, 1.0f);
@@ -324,6 +374,7 @@ void Harmony::cluster() {
     for (int i = 0; i < max_iter_kmeans; ++i) {
         update_R();
         compute_objective();
+        check_state("assignment update");
 
         if (i > window_size) {
             if (check_convergence(0)) {
@@ -378,7 +429,9 @@ void Harmony::update_R() {
         Rcells = -dist_matcells;
         Rcells.each_col() /= sigma;
         Rcells = arma::exp(Rcells);
-        Rcells = arma::normalise(Rcells, 1, 0);
+        ROWTYPE normalizers = arma::sum(Rcells, 0);
+        check_assignment_normalizers(normalizers, "assignment update");
+        Rcells.each_row() /= normalizers;
 
         // Gather-multiply diversity for each covariate
         MATTYPE div_ratio = harmony_pow(((2*E) + 1) / (O + E + 1), theta);
@@ -390,7 +443,9 @@ void Harmony::update_R() {
                 for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
             }
         }
-        Rcells = arma::normalise(Rcells, 1, 0);
+        normalizers = arma::sum(Rcells, 0);
+        check_assignment_normalizers(normalizers, "assignment update");
+        Rcells.each_row() /= normalizers;
 
         E += arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, 1.0f);

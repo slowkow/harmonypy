@@ -200,6 +200,34 @@ def test_objective_increase_does_not_stop_harmony():
     assert len(ho.objective_harmony) > 2
 
 
+def test_nonfinite_assignments_raise_numerical_error():
+    data_mat = np.array(
+        [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],
+         [-1.0, 0.0], [-0.8, -0.2], [0.0, -1.0]]
+    )
+    meta_data = {"batch": np.array(["a", "a", "b", "b", "a", "b"])}
+
+    with pytest.raises(RuntimeError) as error:
+        hm.run_harmony(
+            data_mat,
+            meta_data,
+            "batch",
+            sigma=1e-4,
+            nclust=2,
+            max_iter_harmony=1,
+            max_iter_kmeans=1,
+            verbose=False,
+            random_state=0,
+            ncores=1,
+        )
+
+    message = str(error.value)
+    assert "assignment normalizers must be finite and positive" in message
+    assert "sigma=[0.0001, 0.0001]" in message
+    assert "theta=[2, 2]" in message
+    assert "block_size=0.05" in message
+
+
 def test_random_seed():
     print("\n" + "=" * 60)
     print("TEST: test_random_seed")

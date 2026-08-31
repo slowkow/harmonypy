@@ -28,15 +28,17 @@ inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
     return lambda_vec;
 }
 
-inline MATTYPE harmony_pow(MATTYPE A, const VECTYPE& T) {
-    for (unsigned c = 0; c < A.n_cols; c++) {
-        A.col(c) = arma::pow(A.col(c), T(c));
-    }
-    return A;
-}
-
 MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
 bool objective_converged(float obj_old, float obj_new, float epsilon);
+MATTYPE assignment_logits(
+    const MATTYPE& distances,
+    const VECTYPE& sigma,
+    const MATTYPE& E,
+    const MATTYPE& O,
+    const VECTYPE& theta,
+    const arma::Mat<arma::uword>& batch_ids
+);
+ROWTYPE exponentiate_shifted_logits(MATTYPE& logits);
 
 class Harmony {
 public:
@@ -131,6 +133,7 @@ private:
         MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
     ) const;
     void check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const;
+    void normalize_log_assignments(MATTYPE& logits, const char* stage) const;
     void check_state(const char* stage) const;
     [[noreturn]] void numerical_error(const char* stage, const char* invariant) const;
 };

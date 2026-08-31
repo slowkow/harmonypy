@@ -21,7 +21,7 @@ import os
 import pytest
 import sys
 import harmonypy as hm
-from harmonypy._harmony_cpp import _objective_converged
+from harmonypy._harmony_cpp import _assignment_probabilities, _objective_converged
 
 
 def pearsonr(x, y):
@@ -161,18 +161,34 @@ def test_ridge_does_not_reverse_two_cells():
     # With equal weights and penalties, these values should move closer
     # without reversing their order.
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
+def optimizer_case():
+    data_mat = np.array(
+        [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],
+         [-1.0, 0.0], [-0.8, -0.2], [0.0, -1.0]]
+    )
+    meta_data = {"batch": np.array(["a", "a", "b", "b", "a", "b"])}
+    return data_mat, meta_data
+
+
 @pytest.mark.parametrize(
     ("obj_old", "obj_new", "epsilon", "expected"),
     [
         (100.0, 101.0, 0.01, False),
         (100.0, 99.5, 0.01, True),
         (100.0, 90.0, 0.01, False),
+        (100.0, 99.0, 0.01, False),
+        (-100.0, -100.5, 0.01, True),
+        (-100.0, -99.0, 0.01, False),
         (0.0, 0.0, 0.01, True),
         (0.0, 1.0, 0.01, False),
+        (0.0, -1.0, 0.01, False),
         (np.nan, 1.0, 0.01, False),
         (1.0, np.nan, 0.01, False),
         (np.inf, 1.0, 0.01, False),
         (1.0, np.inf, 0.01, False),
+        (-np.inf, 1.0, 0.01, False),
+        (1.0, -np.inf, 0.01, False),
+        (1.0, 1.0, np.nan, False),
     ],
 )
 def test_objective_convergence(obj_old, obj_new, epsilon, expected):
@@ -180,40 +196,202 @@ def test_objective_convergence(obj_old, obj_new, epsilon, expected):
 
 
 def test_objective_increase_does_not_stop_harmony():
-    data_mat = np.random.default_rng(0).normal(size=(12, 3))
-    meta_data = {"batch": np.repeat(["a", "b"], 6)}
+    data_mat, meta_data = optimizer_case()
 
     ho = hm.run_harmony(
         data_mat,
         meta_data,
         "batch",
-        nclust=3,
+        sigma=1.0,
+        theta=2.0,
+        nclust=2,
         lamb=1.0,
-        max_iter_harmony=4,
-        max_iter_kmeans=4,
+        block_size=0.5,
+        max_iter_harmony=2,
+        max_iter_kmeans=1,
+        epsilon_cluster=0.0,
+        epsilon_harmony=0.01,
         verbose=False,
-        random_state=5,
+        random_state=0,
         ncores=1,
     )
 
     assert ho.objective_harmony[1] > ho.objective_harmony[0]
-    assert len(ho.objective_harmony) > 2
+    assert len(ho.objective_harmony) == 3
+
+
+def assignment_inputs():
+    distances = np.array(
+        [[0.2, 1.1, 0.7], [1.2, 0.3, 0.6], [0.8, 0.9, 0.2]]
+    )
+    sigma = np.array([0.8, 1.2, 0.6])
+    E = np.array(
+        [[2.0, 4.0, 1.0, 3.0],
+         [3.0, 2.0, 4.0, 1.0],
+         [1.0, 3.0, 2.0, 4.0]]
+    )
+    O = np.array(
+        [[3.0, 1.0, 2.0, 4.0],
+         [1.0, 4.0, 3.0, 2.0],
+         [2.0, 3.0, 1.0, 4.0]]
+    )
+    theta = np.array([2.0, 1.5, 0.5, 3.0])
+    batch_ids = np.array([[0, 1, 0], [2, 3, 3]], dtype=np.int64)
+    return distances, sigma, E, O, theta, batch_ids
+
+
+def old_assignment_probabilities(distances, sigma, E, O, theta, batch_ids):
+    probabilities = np.exp(-distances / sigma[:, None])
+    probabilities /= probabilities.sum(axis=0)
+    ratio = (2 * E + 1) / (O + E + 1)
+    for cell_batches in batch_ids:
+        probabilities *= ratio[:, cell_batches] ** theta[cell_batches]
+    probabilities /= probabilities.sum(axis=0)
+    return probabilities
+
+
+def test_log_assignments_match_moderate_multiplicative_weights():
+    inputs = tuple(np.ascontiguousarray(value) for value in assignment_inputs())
+
+    actual = _assignment_probabilities(*inputs)
+    expected = old_assignment_probabilities(*inputs)
+
+    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=1e-7)
+
+
+def test_log_assignments_ignore_cell_logit_shifts():
+    distances, sigma, E, O, theta, batch_ids = assignment_inputs()
+    inputs = tuple(
+        np.ascontiguousarray(value)
+        for value in (distances, sigma, E, O, theta, batch_ids)
+    )
+    expected = _assignment_probabilities(*inputs)
+    offsets = np.array([30.0, -40.0, 20.0])
+    shifted_distances = distances - sigma[:, None] * offsets
+
+    actual = _assignment_probabilities(
+        np.ascontiguousarray(shifted_distances), *inputs[1:]
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=1e-6)
+
+
+def test_log_assignments_preserve_covariate_penalties():
+    distances, sigma, E, O, theta, batch_ids = assignment_inputs()
+    neutral_theta = theta.copy()
+    neutral_theta[2:] = 0.0
+
+    one_covariate = _assignment_probabilities(
+        *tuple(
+            np.ascontiguousarray(value)
+            for value in (distances, sigma, E, O, neutral_theta, batch_ids[:1])
+        )
+    )
+    neutral_covariate = _assignment_probabilities(
+        *tuple(
+            np.ascontiguousarray(value)
+            for value in (distances, sigma, E, O, neutral_theta, batch_ids)
+        )
+    )
+    reversed_covariates = _assignment_probabilities(
+        *tuple(
+            np.ascontiguousarray(value)
+            for value in (distances, sigma, E, O, theta, batch_ids[::-1])
+        )
+    )
+    original = _assignment_probabilities(
+        *tuple(
+            np.ascontiguousarray(value)
+            for value in (distances, sigma, E, O, theta, batch_ids)
+        )
+    )
+
+    np.testing.assert_allclose(neutral_covariate, one_covariate, atol=1e-7)
+    np.testing.assert_allclose(reversed_covariates, original, atol=1e-7)
+
+
+def test_extreme_theta_and_unbalanced_batches_remain_finite():
+    distances = np.array(
+        [[0.1, 0.3, 0.5, 0.7, 0.9, 1.1],
+         [1.1, 0.9, 0.7, 0.5, 0.3, 0.1]]
+    )
+    sigma = np.array([0.1, 0.1])
+    E = np.array([[5.0, 1.0], [5.0, 1.0]])
+    O = np.array([[5.0, 0.0], [0.0, 1.0]])
+    theta = np.array([1000.0, 1000.0])
+    batch_ids = np.array([[0, 0, 0, 0, 0, 1]], dtype=np.int64)
+
+    probabilities = _assignment_probabilities(
+        *tuple(
+            np.ascontiguousarray(value)
+            for value in (distances, sigma, E, O, theta, batch_ids)
+        )
+    )
+
+    assert np.isfinite(probabilities).all()
+    assert (probabilities >= 0).all()
+    np.testing.assert_allclose(probabilities.sum(axis=0), 1.0, atol=1e-7)
+
+    data_mat, _ = optimizer_case()
+    meta_data = {"batch": np.array(["a", "a", "a", "a", "a", "b"])}
+    ho = hm.run_harmony(
+        data_mat,
+        meta_data,
+        "batch",
+        sigma=1e-4,
+        theta=1000.0,
+        nclust=2,
+        lamb=1.0,
+        block_size=0.5,
+        max_iter_harmony=1,
+        max_iter_kmeans=1,
+        verbose=False,
+        random_state=0,
+        ncores=1,
+    )
+
+    assert np.isfinite(ho.R).all()
+    assert np.isfinite(ho.objective_harmony).all()
+    assert np.isfinite(ho.Z_corr).all()
+    np.testing.assert_allclose(ho.R.sum(axis=1), 1.0, atol=1e-7)
+
+
+def test_small_sigma_assignments_remain_finite():
+    data_mat, meta_data = optimizer_case()
+
+    ho = hm.run_harmony(
+        data_mat,
+        meta_data,
+        "batch",
+        sigma=1e-4,
+        nclust=2,
+        lamb=1.0,
+        block_size=0.5,
+        max_iter_harmony=1,
+        max_iter_kmeans=1,
+        verbose=False,
+        random_state=0,
+        ncores=1,
+    )
+
+    assert np.isfinite(ho.R).all()
+    assert np.isfinite(ho.objective_harmony).all()
+    assert np.isfinite(ho.Z_corr).all()
+    assert (ho.R >= 0).all()
+    np.testing.assert_allclose(ho.R.sum(axis=1), 1.0, atol=1e-7)
 
 
 def test_nonfinite_assignments_raise_numerical_error():
-    data_mat = np.array(
-        [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],
-         [-1.0, 0.0], [-0.8, -0.2], [0.0, -1.0]]
-    )
-    meta_data = {"batch": np.array(["a", "a", "b", "b", "a", "b"])}
+    data_mat, meta_data = optimizer_case()
 
     with pytest.raises(RuntimeError) as error:
         hm.run_harmony(
             data_mat,
             meta_data,
             "batch",
-            sigma=1e-4,
+            sigma=float("nan"),
             nclust=2,
+            lamb=1.0,
             max_iter_harmony=1,
             max_iter_kmeans=1,
             verbose=False,
@@ -223,7 +401,7 @@ def test_nonfinite_assignments_raise_numerical_error():
 
     message = str(error.value)
     assert "assignment normalizers must be finite and positive" in message
-    assert "sigma=[0.0001, 0.0001]" in message
+    assert "sigma=[nan, nan]" in message
     assert "theta=[2, 2]" in message
     assert "block_size=0.05" in message
 

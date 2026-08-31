@@ -130,6 +130,9 @@ private:
     VECTYPE prepare_multi_covariate_ridge(
         MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
     ) const;
+    void check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const;
+    void check_state(const char* stage) const;
+    [[noreturn]] void numerical_error(const char* stage, const char* invariant) const;
 };
 
 } // namespace harmony

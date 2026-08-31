@@ -23,6 +23,33 @@ bool objective_converged(float obj_old, float obj_new, float epsilon) {
     return delta >= 0.0f && delta < epsilon;
 }
 
+MATTYPE assignment_logits(
+    const MATTYPE& distances,
+    const VECTYPE& sigma,
+    const MATTYPE& E,
+    const MATTYPE& O,
+    const VECTYPE& theta,
+    const arma::Mat<arma::uword>& batch_ids
+) {
+    MATTYPE logits = -distances;
+    logits.each_col() /= sigma;
+
+    MATTYPE log_diversity = arma::log((2 * E) + 1) - arma::log(O + E + 1);
+    log_diversity.each_row() %= theta.t();
+    for (arma::uword c = 0; c < batch_ids.n_rows; ++c) {
+        for (arma::uword j = 0; j < batch_ids.n_cols; ++j) {
+            logits.col(j) += log_diversity.col(batch_ids(c, j));
+        }
+    }
+    return logits;
+}
+
+ROWTYPE exponentiate_shifted_logits(MATTYPE& logits) {
+    logits.each_row() -= arma::max(logits, 0);
+    logits = arma::exp(logits);
+    return arma::sum(logits, 0);
+}
+
 [[noreturn]] void Harmony::numerical_error(const char* stage, const char* invariant) const {
     std::ostringstream oss;
     oss << "Harmony numerical error during " << stage << ": " << invariant
@@ -43,6 +70,12 @@ bool objective_converged(float obj_old, float obj_new, float epsilon) {
 void Harmony::check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const {
     if (!normalizers.is_finite() || normalizers.min() <= 0.0f)
         numerical_error(stage, "assignment normalizers must be finite and positive");
+}
+
+void Harmony::normalize_log_assignments(MATTYPE& logits, const char* stage) const {
+    ROWTYPE normalizers = exponentiate_shifted_logits(logits);
+    check_assignment_normalizers(normalizers, stage);
+    logits.each_row() /= normalizers;
 }
 
 void Harmony::check_state(const char* stage) const {
@@ -285,10 +318,7 @@ void Harmony::init_cluster() {
 
     R = -dist_mat;
     R.each_col() /= sigma;
-    R = arma::exp(R);
-    ROWTYPE normalizers = arma::sum(R, 0);
-    check_assignment_normalizers(normalizers, "initialization");
-    R.each_row() /= normalizers;
+    normalize_log_assignments(R, "initialization");
 
     E = arma::sum(R, 1) * Pr_b.t();
     O.zeros();
@@ -361,10 +391,7 @@ void Harmony::cluster() {
         dist_mat = 2.0f * (1.0f - Y.t() * Z_corr);
         R = -dist_mat;
         R.each_col() /= sigma;
-        R = arma::exp(R);
-        ROWTYPE normalizers = arma::sum(R, 0);
-        check_assignment_normalizers(normalizers, "cluster initialization");
-        R.each_row() /= normalizers;
+        normalize_log_assignments(R, "cluster initialization");
         E = arma::sum(R, 1) * Pr_b.t();
         O.zeros();
         scatter_add_O(R, batch_ids, 1.0f);
@@ -417,8 +444,6 @@ void Harmony::update_R() {
         unsigned idx_max = ((i + 1) * cells_per_block) - 1;
         if (i == n_blocks - 1) idx_max = N - 1;
         if (idx_min >= static_cast<unsigned>(N)) break;
-        unsigned block_n = idx_max - idx_min + 1;
-
         auto Rcells = R.submat(0, idx_min, R.n_rows - 1, idx_max);
         auto dist_matcells = dist_mat.submat(0, idx_min, dist_mat.n_rows - 1, idx_max);
         arma::Mat<arma::uword> block_ids = batch_ids_shuf.cols(idx_min, idx_max);
@@ -426,26 +451,10 @@ void Harmony::update_R() {
         E -= arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, -1.0f);
 
-        Rcells = -dist_matcells;
-        Rcells.each_col() /= sigma;
-        Rcells = arma::exp(Rcells);
-        ROWTYPE normalizers = arma::sum(Rcells, 0);
-        check_assignment_normalizers(normalizers, "assignment update");
-        Rcells.each_row() /= normalizers;
-
-        // Gather-multiply diversity for each covariate
-        MATTYPE div_ratio = harmony_pow(((2*E) + 1) / (O + E + 1), theta);
-        for (int c = 0; c < n_covariates; ++c) {
-            for (unsigned j = 0; j < block_n; ++j) {
-                unsigned b = block_ids(c, j);
-                float* col = Rcells.colptr(j);
-                const float* src = div_ratio.colptr(b);
-                for (int ki = 0; ki < K; ++ki) col[ki] *= src[ki];
-            }
-        }
-        normalizers = arma::sum(Rcells, 0);
-        check_assignment_normalizers(normalizers, "assignment update");
-        Rcells.each_row() /= normalizers;
+        // E and O stay frozen while every cell in this block is reassigned.
+        MATTYPE logits = assignment_logits(dist_matcells, sigma, E, O, theta, block_ids);
+        normalize_log_assignments(logits, "assignment update");
+        Rcells = logits;
 
         E += arma::sum(Rcells, 1) * Pr_b.t();
         scatter_add_O(Rcells, block_ids, 1.0f);

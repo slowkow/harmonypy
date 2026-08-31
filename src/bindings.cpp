@@ -3,6 +3,7 @@
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 
 #include <memory>
+#include <stdexcept>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/vector.h>
@@ -134,6 +135,32 @@ NB_MODULE(_harmony_cpp, m) {
 
     m.def("_objective_converged", &objective_converged,
           nb::arg("obj_old"), nb::arg("obj_new"), nb::arg("epsilon"));
+
+    m.def("_assignment_probabilities", [](
+        NpDouble2D distances,
+        NpDouble1D sigma,
+        NpDouble2D E,
+        NpDouble2D O,
+        NpDouble1D theta,
+        NpInt64_2D batch_ids
+    ) {
+        MATTYPE logits = assignment_logits(
+            arma::conv_to<MATTYPE>::from(numpy_to_arma_mat(distances)),
+            arma::conv_to<VECTYPE>::from(numpy_to_arma_vec(sigma)),
+            arma::conv_to<MATTYPE>::from(numpy_to_arma_mat(E)),
+            arma::conv_to<MATTYPE>::from(numpy_to_arma_mat(O)),
+            arma::conv_to<VECTYPE>::from(numpy_to_arma_vec(theta)),
+            arma::conv_to<arma::Mat<arma::uword>>::from(numpy_to_arma_imat(batch_ids))
+        );
+        ROWTYPE normalizers = exponentiate_shifted_logits(logits);
+        if (!normalizers.is_finite() || normalizers.min() <= 0.0f)
+            throw std::runtime_error("assignment normalizers must be finite and positive");
+        logits.each_row() /= normalizers;
+        arma::mat result = arma::conv_to<arma::mat>::from(logits);
+        return arma_mat_to_numpy(result);
+    },
+        nb::arg("distances"), nb::arg("sigma"), nb::arg("E"), nb::arg("O"),
+        nb::arg("theta"), nb::arg("batch_ids"), nb::rv_policy::move);
 
     nb::class_<HarmonyWrapper>(m, "HarmonyCpp")
         .def(nb::init<

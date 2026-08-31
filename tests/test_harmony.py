@@ -18,8 +18,10 @@ import csv
 import gzip
 import numpy as np
 import os
+import pytest
 import sys
 import harmonypy as hm
+from harmonypy._harmony_cpp import _objective_converged
 
 
 def pearsonr(x, y):
@@ -159,6 +161,43 @@ def test_ridge_does_not_reverse_two_cells():
     # With equal weights and penalties, these values should move closer
     # without reversing their order.
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
+@pytest.mark.parametrize(
+    ("obj_old", "obj_new", "epsilon", "expected"),
+    [
+        (100.0, 101.0, 0.01, False),
+        (100.0, 99.5, 0.01, True),
+        (100.0, 90.0, 0.01, False),
+        (0.0, 0.0, 0.01, True),
+        (0.0, 1.0, 0.01, False),
+        (np.nan, 1.0, 0.01, False),
+        (1.0, np.nan, 0.01, False),
+        (np.inf, 1.0, 0.01, False),
+        (1.0, np.inf, 0.01, False),
+    ],
+)
+def test_objective_convergence(obj_old, obj_new, epsilon, expected):
+    assert _objective_converged(obj_old, obj_new, epsilon) is expected
+
+
+def test_objective_increase_does_not_stop_harmony():
+    data_mat = np.random.default_rng(0).normal(size=(12, 3))
+    meta_data = {"batch": np.repeat(["a", "b"], 6)}
+
+    ho = hm.run_harmony(
+        data_mat,
+        meta_data,
+        "batch",
+        nclust=3,
+        lamb=1.0,
+        max_iter_harmony=4,
+        max_iter_kmeans=4,
+        verbose=False,
+        random_state=5,
+        ncores=1,
+    )
+
+    assert ho.objective_harmony[1] > ho.objective_harmony[0]
+    assert len(ho.objective_harmony) > 2
 
 
 def test_random_seed():

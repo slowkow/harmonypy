@@ -65,6 +65,13 @@ test-command = "mkdir -p /tmp/hptest/data && cp -r {project}/tests /tmp/hptest/ 
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
+# Build on manylinux_2_28 (AlmaLinux 8, gcc-toolset >= 12). The older
+# manylinux2014 image ships gcc 10.2.1, but recent NumPy releases no longer
+# publish manylinux2014 wheels and require gcc >= 10.3, so the wheel test step
+# tried to build NumPy from source and failed. manylinux_2_28 has both a new
+# enough compiler and prebuilt NumPy wheels.
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 before-all = "yum install -y epel-release && yum install -y openblas-devel lapack-devel || apk add openblas-dev lapack-dev"
 
 [tool.cibuildwheel.macos]

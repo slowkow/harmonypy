@@ -13,6 +13,10 @@
   extension with `-fsanitize=address,undefined` and runs the test suite under
   the sanitizer runtime, so memory errors like the one above fail CI. Build it
   locally with `pip install -e . -C cmake.define.HARMONYPY_SANITIZE=ON`.
+- Linux wheels are now built on `manylinux_2_28` (glibc 2.28+, e.g. RHEL/
+  AlmaLinux 8, Ubuntu 18.10+) instead of `manylinux2014`. Recent NumPy releases
+  no longer ship `manylinux2014` wheels and require GCC >= 10.3, which the old
+  build image did not provide; `manylinux_2_28` matches NumPy's own wheels.
 
 # 2.0.0 - 2026-04-22
 

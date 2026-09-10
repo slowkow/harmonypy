@@ -64,9 +64,14 @@ jobs:
         UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
       run: |
         # Python is not sanitized, so the ASan runtime must be preloaded
-        # (it has to come first in the load order).
+        # (it has to come first in the load order). libstdc++ is preloaded
+        # too: Python itself does not link it, so otherwise ASan's __cxa_throw
+        # interceptor initializes before libstdc++ is loaded and the first C++
+        # exception thrown by the extension aborts with
+        # "CHECK failed: real___cxa_throw != 0".
         LIBASAN=$(gcc -print-file-name=libasan.so)
-        echo "Preloading $LIBASAN"
+        LIBSTDCXX=$(gcc -print-file-name=libstdc++.so)
+        echo "Preloading $LIBASAN:$LIBSTDCXX"
         # -s disables pytest's output capture so the sanitizer report, if any,
         # reaches the CI log instead of being swallowed on abort.
-        LD_PRELOAD="$LIBASAN" pytest tests/ -v -s
+        LD_PRELOAD="$LIBASAN:$LIBSTDCXX" pytest tests/ -v -s

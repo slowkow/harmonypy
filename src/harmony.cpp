@@ -422,8 +422,52 @@ bool Harmony::check_convergence(int i_type) {
 // moe_correct_ridge
 // =========================================================================
 
+/**
+ * Prepare ridge terms for groups that share cells, such as lab A and Monday.
+ * Include their overlap in the fit, but count each cell once in overall totals.
+ *
+ * cov_mat contains the group totals. Add the overlap weights and recompute
+ * its intercept weight before adding the ridge penalty.
+ * Zero working weights for cells outside the groups in keep, then return
+ * the retained cells' weighted coordinate sum.
+ */
+VECTYPE Harmony::prepare_multi_covariate_ridge(
+    MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
+) const {
+    // Map retained groups to matrix rows; zero marks an excluded group.
+    std::vector<unsigned> batch_row(B, 0);
+    for (unsigned i = 0; i < keep.size(); ++i)
+        batch_row[keep[i]] = i + 1;
+
+    cov_mat(0, 0) = 0;
+    for (int j = 0; j < N; ++j) {
+        bool selected = false;
+        for (int c = 0; c < n_covariates; ++c) {
+            unsigned row = batch_row[batch_ids(c, j)];
+            if (row == 0) continue;
+            selected = true;
+            for (int other = c + 1; other < n_covariates; ++other) {
+                unsigned col = batch_row[batch_ids(other, j)];
+                if (col == 0) continue;
+                cov_mat(row, col) += weights(j);
+                cov_mat(col, row) += weights(j);
+            }
+        }
+        // Count each cell once, even if it belongs to several retained groups.
+        if (selected) {
+            cov_mat(0, 0) += weights(j);
+        } else {
+            weights(j) = 0;
+        }
+    }
+
+    // Zero weights exclude cells without copying their coordinates.
+    return Z_orig * weights.t();
+}
+
 void Harmony::moe_correct_ridge() {
     Z_corr = Z_orig;
+    const bool multiple_covariates = B_vec.size() > 1;
 
     for (int k = 0; k < K; ++k) {
         VECTYPE avg_R = O.row(k).t() / batch_sizes;
@@ -488,10 +532,17 @@ void Harmony::moe_correct_ridge() {
             cov_mat(i + 1, 0) = Ok(i);
             cov_mat(i + 1, i + 1) = Ok(i);
         }
+
+        // Work on a copy so masking does not change the cluster assignments.
+        ROWTYPE Rk = R.row(k);
+        VECTYPE z_sum_all(d, arma::fill::zeros);
+        if (multiple_covariates) {
+            z_sum_all = prepare_multi_covariate_ridge(cov_mat, Rk, keep);
+        }
         cov_mat += arma::diagmat(lamb_vec);
 
         MATTYPE inv_cov;
-        if (B_vec.size() > 1) {
+        if (multiple_covariates) {
             inv_cov = arma::inv(cov_mat);
         } else {
             VECTYPE ac = -cov_mat.row(0).as_col();
@@ -506,17 +557,15 @@ void Harmony::moe_correct_ridge() {
             inv_cov.diag() += b;
         }
 
-        ROWTYPE Rk = R.row(k);
         unsigned n_batches = all_qualify ? B : n_keep;
 
         std::vector<VECTYPE> z_sums(n_batches);
-        VECTYPE z_sum_all(d, arma::fill::zeros);
 
         for (unsigned i = 0; i < n_batches; ++i) {
             unsigned b = all_qualify ? i : keep[i];
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            z_sum_all += z_sums[i];
+            if (!multiple_covariates) z_sum_all += z_sums[i];
         }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();

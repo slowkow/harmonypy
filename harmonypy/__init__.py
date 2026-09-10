@@ -1,6 +1,6 @@
 from .harmony import Harmony, run_harmony
 
-__version__ = '2.0.1'
+__version__ = '2.0.2'
 
 
 def __getattr__(name):

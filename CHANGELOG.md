@@ -1,3 +1,33 @@
+# 2.0.2 - 2026-09-10
+
+### Fixed
+- Fixed the ridge correction when correcting for more than one covariate
+  (e.g. lab and processing day). The per-batch shortcut introduced in the C++
+  rewrite assumed each cell belongs to a single batch, which double-counted
+  cells in the intercept term and dropped the overlap between covariate
+  groups, overcorrecting: a two-cell lab/day example was reversed from
+  `[1, 2]` to `[1.67, 1.33]`. The correction now follows the R Harmony ridge
+  calculation and gives `[1.4, 1.6]`, matching R harmony 2.0.4 to within
+  1.2e-7. Single-covariate results are unchanged. Thanks to @jkhales for
+  finding and fixing this (#54).
+- Harmony no longer reports convergence when the objective *increases*
+  between iterations; a non-negative relative decrease below
+  `epsilon_harmony` is now required, so affected runs continue optimizing
+  instead of stopping early. Mirrors R Harmony PR immunogenomics/harmony#293.
+  Results are unchanged for runs whose objective decreases monotonically.
+  Thanks to @fderop (#55).
+- Cluster assignments are computed in log space (a shifted softmax), so very
+  small `sigma` or very large `theta` no longer underflow or overflow into NaN
+  assignments. Results are unchanged for ordinary parameters. (#55)
+- If the optimizer state becomes non-finite, `run_harmony` now raises a
+  `RuntimeError` naming the stage and parameters instead of silently
+  returning NaNs. (#55)
+
+### Development
+- The sanitizer CI job preloads libstdc++ alongside libasan so C++
+  exceptions thrown by the extension are handled correctly under
+  AddressSanitizer.
+
 # 2.0.1 - 2026-09-09
 
 ### Fixed

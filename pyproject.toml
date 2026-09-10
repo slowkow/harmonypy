@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "harmonypy"
-version = "2.0.1"
+version = "2.0.2"
 description = "Batch correction for single-cell data using the Harmony algorithm with a C++ Armadillo backend."
 readme = "README.md"
 license = "GPL-3.0-or-later"

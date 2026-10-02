@@ -1,3 +1,19 @@
+# Unreleased
+
+### Fixed
+- `batch_prop_cutoff` now compares the fraction of each batch's cells
+  soft-assigned to a cluster with the cutoff, as R Harmony does, when
+  correcting for more than one covariate. Since 2.0.0, each batch's cell count
+  was divided by the number of covariates, so with two covariates (e.g. lab
+  and day) and a cutoff of 0.1, a batch with 6% of its cells in a cluster
+  counted as 12% and passed the cutoff there, where R Harmony skips it. In
+  effect the cutoff was `batch_prop_cutoff / n_covariates`. Single-covariate
+  results are unchanged. On a 68,785-cell dataset corrected for donor and
+  batch, output before and after the fix is identical at the default cutoff
+  (1e-5); at 0.01, the minimum per-PC correlation with R improves from 0.923
+  to 0.970. See `notebooks/pr56-batch-prop-cutoff/`. Thanks to @jkhales for
+  finding and fixing this (#56).
+
 # 2.0.2 - 2026-09-16
 
 ### Fixed

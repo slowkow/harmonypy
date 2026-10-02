@@ -1,0 +1,5 @@
+cutoff	column	pairs	above_cutoff	included_by_v2_0_2_only
+1e-05	donor	2100	2100	0
+1e-05	batch	1100	1100	0
+0.01	donor	2100	826	753
+0.01	batch	1100	510	488

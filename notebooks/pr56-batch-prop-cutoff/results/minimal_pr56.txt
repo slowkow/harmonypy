@@ -1,0 +1,4 @@
+assignments R: [0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5]
+input:         [1. 2. 3. 4.]
+output:        [1. 2. 3. 4.]
+unchanged:     True

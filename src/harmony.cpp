@@ -248,16 +248,13 @@ void Harmony::build_batch_structures(const arma::Mat<int64_t>& batch_of_cell) {
         }
     }
 
-    // Compute batch sizes (count cells per batch across all covariates)
+    // Count cells in each covariate level.
     batch_sizes.zeros(B);
     for (int c = 0; c < n_covariates; ++c) {
         for (int j = 0; j < N; ++j) {
             batch_sizes(batch_ids(c, j)) += 1.0f;
         }
     }
-    // Each cell is counted n_covariates times; normalize
-    batch_sizes /= static_cast<float>(n_covariates);
-
     // Build per-batch cell index lists (using first covariate for indexing)
     // For ridge correction, batch_index[b] lists cells belonging to batch b.
     // With multiple covariates, a cell's "primary" batch is determined by

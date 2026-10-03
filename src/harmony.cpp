@@ -3,8 +3,10 @@
 //               2019  Kamil Slowikowski <kslowikowski@gmail.com>
 //
 // Uses custom scatter/gather kernels on a batch_id vector instead of
-// sparse Phi matrices. Per-cell work runs on a std::thread pool
-// (thread_pool.hpp); matrix products go to BLAS (Accelerate/OpenBLAS).
+// sparse Phi matrices. Per-cell work, including the large matrix products,
+// runs on a std::thread pool (thread_pool.hpp), so speed does not depend on
+// whether the BLAS library (Accelerate/OpenBLAS) is multi-threaded; BLAS and
+// LAPACK only handle the small per-cluster systems.
 //
 // Work is split into the same tasks for any number of threads (runs of at
 // most kCellsPerTask cells from one batch, or one cluster), and per-task
@@ -84,6 +86,17 @@ inline float accumulate(const float* x, unsigned n) {
     }
     if (j - 1 < n) acc1 += x[j - 1];
     return acc1 + acc2;
+}
+
+// Dot product of n floats in eight partial sums combined in a fixed order,
+// so the loop vectorizes and the result does not depend on the BLAS library.
+inline float dot(const float* a, const float* b, unsigned n) {
+    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned i = 0;
+    for (; i + 8 <= n; i += 8)
+        for (unsigned l = 0; l < 8; ++l) acc[l] += a[i + l] * b[i + l];
+    for (unsigned l = 0; i < n; ++i, ++l) acc[l] += a[i] * b[i];
+    return ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7]));
 }
 
 // Softmax of one column of logits, in place, as normalize_log_assignments did:
@@ -305,17 +318,17 @@ MATTYPE Harmony::kmeans_init(const MATTYPE& X) {
     for (int i = 0; i < K; ++i) {
         const bool more = i + 1 < K;
         const bool drawing_ahead = more && n_threads > 1 && next_draws.try_start([&] { draw(draws_next); });
-        const ROWTYPE similarity = Y.col(i).t() * X;
-        const float* sim = similarity.memptr();
+        const float* y = Y.colptr(i);
+        const unsigned n_dims = X.n_rows;
         const float* u = draws_now.memptr();
 
-        // prob = -log(u) / distance, and its maximum.
-        run_tasks(n_tasks, size_t(N) * 16, [&](size_t t) {
+        // prob = -log(u) / distance with distance = |2 (1 - y'x)|, and its maximum.
+        run_tasks(n_tasks, size_t(N) * (n_dims + 16), [&](size_t t) {
             const unsigned j0 = t * kCellsPerTask;
             const unsigned j1 = std::min<unsigned>(N, j0 + kCellsPerTask);
             float max_prob = -std::numeric_limits<float>::infinity();
             for (unsigned j = j0; j < j1; ++j) {
-                const float distance = std::abs((1.0f - sim[j]) * 2.0f);
+                const float distance = std::abs((1.0f - dot(y, X.colptr(j), n_dims)) * 2.0f);
                 p[j] = (-std::log(u[j])) / (distance + 1e-10f);
                 if (p[j] > max_prob) max_prob = p[j];
             }
@@ -718,18 +731,28 @@ void Harmony::allocate_buffers() {
 // init_cluster
 // =========================================================================
 
-// dist_mat holds Y' * Z_corr. Turn it into distances 2 * (1 - cosine) and set
-// R = softmax(-dist / sigma) for every cell, without the diversity penalty.
+// Set dist_mat to the distances 2 * (1 - cosine) between each cell and each
+// centroid, and R = softmax(-dist / sigma) for every cell, without the
+// diversity penalty. The similarities Y' Z_corr(:, j) are summed over
+// dimensions in order, for all clusters side by side, so the loop vectorizes.
 void Harmony::assign_without_diversity(const char* stage) {
     const size_t n_tasks = n_chunks(N);
     std::vector<unsigned char> flags(n_tasks, 0);
     const float* s = sigma.memptr();
-    run_tasks(n_tasks, size_t(N) * K * 8, [&](size_t t) {
+    const MATTYPE Y_t = Y.t();
+    run_tasks(n_tasks, size_t(N) * K * (d + 8), [&](size_t t) {
         const unsigned j0 = t * kCellsPerTask;
         const unsigned j1 = std::min<unsigned>(N, j0 + kCellsPerTask);
         unsigned char found = 0;
         for (unsigned j = j0; j < j1; ++j) {
-            float* dist = dist_mat.colptr(j);
+            const float* x = Z_corr.colptr(j);
+            float* __restrict__ dist = dist_mat.colptr(j);
+            std::fill(dist, dist + K, 0.0f);
+            for (int a = 0; a < d; ++a) {
+                const float x_a = x[a];
+                const float* __restrict__ y_a = Y_t.colptr(a);
+                for (int k = 0; k < K; ++k) dist[k] += x_a * y_a[k];
+            }
             float* logits = R.colptr(j);
             for (int k = 0; k < K; ++k) {
                 const float distance = 2.0f * (1.0f - dist[k]);
@@ -776,7 +799,6 @@ void Harmony::init_cluster() {
     Y = kmeans_init(Z_corr);
     Y = arma::normalise(Y, 2, 0);
 
-    dist_mat = Y.t() * Z_corr;
     assign_without_diversity("initialization");
     rebuild_O_E();
 
@@ -878,7 +900,6 @@ void Harmony::harmonize(int iter_harmony, bool verbose_flag) {
 void Harmony::cluster() {
     if (objective_harmony.size() > 1) {
         normalise_columns(Z_corr);
-        dist_mat = Y.t() * Z_corr;
         assign_without_diversity("cluster initialization");
         rebuild_O_E();
     }
@@ -1158,47 +1179,54 @@ bool Harmony::check_convergence(int i_type) {
  * Totals for groups that share cells, such as lab A and Monday: for cluster k,
  * a cell counts in the intercept terms if any of its groups is kept
  * (kept(k, b) != 0), and counts once even if several are. cov_sum(k) is the
- * sum of R(k, :) over those cells and z_all(:, k) the matching weighted
- * coordinate sum, computed as one masked GEMM per chunk of cells.
+ * sum of R(k, :) over those cells and z_all(k, :) the matching weighted
+ * coordinate sum, accumulated over fixed chunks of cells and added in order.
  */
 void Harmony::multi_covariate_totals(const arma::Mat<unsigned char>& kept, MATTYPE& z_all, VECTYPE& cov_sum) {
-    constexpr unsigned kCellsPerProduct = 16 * kCellsPerTask;
     const unsigned n_cov = n_covariates;
-    z_all.zeros(d, K);
-    MATTYPE masked(K, std::min<unsigned>(kCellsPerProduct, N));
-    MATTYPE task_sums(K, n_chunks(N));
-    ThreadScratch scratch(pool_threads(), K);
+    const size_t sum_size = static_cast<size_t>(K) * d;
+    // At most about 1024 tasks, so the per-task sums stay small.
+    const unsigned task_cells = std::max<unsigned>(kCellsPerTask, (static_cast<unsigned>(N) + 1023) / 1024);
+    const size_t n_tasks = (static_cast<size_t>(N) + task_cells - 1) / task_cells;
+    MATTYPE partials(sum_size + K, n_tasks);
+    ThreadScratch scratch(pool_threads(), sum_size + 2 * static_cast<size_t>(K));
     const unsigned char* kept_mem = kept.memptr();
-    for (unsigned j0 = 0; j0 < static_cast<unsigned>(N); j0 += kCellsPerProduct) {
-        const unsigned n = std::min<unsigned>(kCellsPerProduct, N - j0);
-        run_tasks_on_threads(n_chunks(n), size_t(n) * K * n_cov, [&](size_t t, unsigned thread) {
-            const unsigned i0 = t * kCellsPerTask;
-            const unsigned i1 = std::min(n, i0 + kCellsPerTask);
-            float* sums = scratch.get(thread);
-            std::fill(sums, sums + K, 0.0f);
-            for (unsigned i = i0; i < i1; ++i) {
-                const unsigned j = j0 + i;
-                const unsigned* batches = &cell_batches[static_cast<size_t>(j) * n_cov];
-                const float* r = R.colptr(j);
-                float* m = masked.colptr(i);
-                for (int k = 0; k < K; ++k) {
-                    unsigned char any = 0;
-                    for (unsigned c = 0; c < n_cov; ++c) any |= kept_mem[static_cast<size_t>(batches[c]) * K + k];
-                    m[k] = any ? r[k] : 0.0f;
-                    sums[k] += m[k];
-                }
+    run_tasks_on_threads(n_tasks, size_t(N) * K * (d + n_cov), [&](size_t t, unsigned thread) {
+        const unsigned j0 = t * task_cells;
+        const unsigned j1 = std::min<unsigned>(N, j0 + task_cells);
+        // acc(k, i) holds the K x d coordinate sums, then K totals, then the
+        // cell's masked assignments.
+        float* acc = scratch.get(thread);
+        float* totals = acc + sum_size;
+        float* masked = totals + K;
+        std::fill(acc, acc + sum_size + K, 0.0f);
+        for (unsigned j = j0; j < j1; ++j) {
+            const unsigned* batches = &cell_batches[static_cast<size_t>(j) * n_cov];
+            const float* r = R.colptr(j);
+            for (int k = 0; k < K; ++k) {
+                unsigned char any = 0;
+                for (unsigned c = 0; c < n_cov; ++c) any |= kept_mem[static_cast<size_t>(batches[c]) * K + k];
+                masked[k] = any ? r[k] : 0.0f;
+                totals[k] += masked[k];
             }
-            std::copy(sums, sums + K, task_sums.colptr(j0 / kCellsPerTask + t));
-        });
-        const MATTYPE Z_chunk(const_cast<float*>(Z_orig.colptr(j0)), d, n, false, true);
-        if (n == masked.n_cols) {
-            z_all += Z_chunk * masked.t();
-        } else {
-            z_all += Z_chunk * masked.cols(0, n - 1).t();
+            const float* z = Z_orig.colptr(j);
+            for (int i = 0; i < d; ++i) {
+                const float z_i = z[i];
+                float* __restrict__ row = acc + static_cast<size_t>(i) * K;
+                const float* __restrict__ m = masked;
+                for (int k = 0; k < K; ++k) row[k] += z_i * m[k];
+            }
         }
-    }
+        std::copy(acc, acc + sum_size + K, partials.colptr(t));
+    });
+    z_all.zeros(K, d);
     cov_sum.zeros(K);
-    for (arma::uword t = 0; t < task_sums.n_cols; ++t) cov_sum += task_sums.col(t);
+    for (size_t t = 0; t < n_tasks; ++t) {
+        const float* part = partials.colptr(t);
+        float* sums = z_all.memptr();
+        for (size_t i = 0; i < sum_size; ++i) sums[i] += part[i];
+        for (int k = 0; k < K; ++k) cov_sum[k] += part[sum_size + k];
+    }
 }
 
 // RZ[b](k, i) = sum of R(k, j) * Z_orig(i, j) over the cells j of batch b,
@@ -1436,7 +1464,7 @@ void Harmony::moe_correct_ridge() {
             // Count each cell once in the intercept, even if it belongs to
             // several kept batches, and add the overlap of kept batches.
             A(0, 0) = cov_sum(k);
-            rhs_dense.row(0) = z_all.col(k).t();
+            rhs_dense.row(0) = z_all.row(k);
             for (size_t p = 0; p < covariate_pairs.size(); ++p) {
                 const CovariatePair& pair = covariate_pairs[p];
                 for (size_t q = 0; q < pair.batch_a.size(); ++q) {

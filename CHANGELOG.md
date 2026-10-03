@@ -64,6 +64,9 @@
   precision, so one correction step matches a float64 solution to about 1e-7
   (root mean square), also with the default `lamb`, where 2.0.2 was off by up
   to 8e-3.
+- `nclust=1` failed with an `AttributeError` with the default `sigma`,
+  because a single `sigma` was expanded to one value per cluster only when
+  there were several clusters; an integer `sigma` failed for any `nclust`.
 - Building from source with CMake older than 3.24 (e.g. Ubuntu 22.04's 3.22)
   failed when Armadillo was not installed, because the header download used
   a CMake 3.24 option.

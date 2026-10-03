@@ -368,6 +368,20 @@ def test_results_do_not_depend_on_ncores(variables):
     assert results[0].objective_harmony == results[1].objective_harmony
 
 
+@pytest.mark.parametrize("settings", [{"nclust": 1}, {"nclust": 5, "sigma": 1}])
+def test_scalar_sigma(settings):
+    """A single sigma, float or int, applies to every cluster, also with one cluster."""
+    rng = np.random.default_rng(9)
+    coordinates = rng.normal(size=(300, 5))
+    metadata = {"lab": rng.choice(["a", "b"], 300)}
+    coordinates[metadata["lab"] == "a"] += 1.0
+
+    result = hm.run_harmony(coordinates, metadata, "lab", verbose=False, **settings)
+
+    assert result.R.shape == (300, settings["nclust"])
+    assert np.isfinite(result.Z_corr).all()
+
+
 def test_more_threads_than_cpus():
     """A larger ncores than there are CPUs is capped instead of failing."""
     rng = np.random.default_rng(3)

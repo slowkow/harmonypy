@@ -79,8 +79,9 @@ def run_harmony(
     lamb : float or list, optional
         Ridge regression penalty. Default is None (auto-estimation).
         Set to a positive value for fixed lambda.
-    sigma : float, optional
-        Kernel bandwidth for soft clustering. Default is 0.1.
+    sigma : float or array-like, optional
+        Kernel bandwidth for soft clustering, one value for all clusters or
+        one per cluster. Default is 0.1.
     nclust : int, optional
         Number of clusters. Default is min(N/30, 100).
     tau : float, optional
@@ -139,7 +140,8 @@ def run_harmony(
     if nclust is None:
         nclust = int(min(round(N / 30.0), 100))
 
-    if isinstance(sigma, float) and nclust > 1:
+    sigma = np.asarray(sigma, dtype=np.float64)
+    if sigma.ndim == 0:
         sigma = np.repeat(sigma, nclust)
 
     if isinstance(vars_use, str):

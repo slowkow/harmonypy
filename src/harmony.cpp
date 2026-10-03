@@ -4,9 +4,10 @@
 //
 // Uses custom scatter/gather kernels on a batch_id vector instead of
 // sparse Phi matrices. Per-cell work, including the large matrix products,
-// runs on a std::thread pool (thread_pool.hpp), so speed does not depend on
-// whether the BLAS library (Accelerate/OpenBLAS) is multi-threaded; BLAS and
-// LAPACK only handle the small per-cluster systems.
+// and the per-cluster ridge systems run on a std::thread pool
+// (thread_pool.hpp). Armadillo is built without BLAS and LAPACK
+// (ARMA_DONT_USE_BLAS, ARMA_DONT_USE_LAPACK): it only stores matrices and
+// does element-wise work, so the module needs no BLAS or LAPACK library.
 //
 // Work is split into the same tasks for any number of threads (runs of at
 // most kCellsPerTask cells from one batch, or one cluster), and per-task
@@ -40,22 +41,43 @@ constexpr unsigned char kBadColumnSum = 2;
 
 inline size_t n_chunks(size_t n) { return (n + kCellsPerTask - 1) / kCellsPerTask; }
 
-// One scratch buffer of n floats per thread, each starting on its own
+// One scratch buffer of n values per thread, each starting on its own
 // 128-byte line, so threads never share a cache line and workers never
 // allocate memory.
+template <class T = float>
 class ThreadScratch {
 public:
     ThreadScratch(unsigned n_threads, size_t n) : stride_((n + 31) / 32 * 32), buffer_(stride_ * n_threads + 32) {
         const uintptr_t address = reinterpret_cast<uintptr_t>(buffer_.data());
-        offset_ = ((128 - address % 128) % 128) / sizeof(float);
+        offset_ = ((128 - address % 128) % 128) / sizeof(T);
     }
-    float* get(unsigned thread) { return buffer_.data() + offset_ + stride_ * thread; }
+    T* get(unsigned thread) { return buffer_.data() + offset_ + stride_ * thread; }
 
 private:
     size_t stride_;
-    std::vector<float> buffer_;
+    std::vector<T> buffer_;
     size_t offset_ = 0;
 };
+
+// Cells added per pass over a K x d sum of outer products.
+constexpr unsigned kCellsPerPass = 4;
+
+// sums(k, i) += sum over cells c of r[c * K + k] * z[c][i], for kCellsPerPass
+// cells (a missing cell has r = 0). Adding several cells per pass divides the
+// loads and stores of sums, which bound this loop, by kCellsPerPass.
+inline void add_outer_products(double* __restrict__ sums, unsigned K, unsigned d,
+                               const double* __restrict__ r, const float* const* z) {
+    static_assert(kCellsPerPass == 4, "the loop below adds four cells");
+    const double* __restrict__ r0 = r;
+    const double* __restrict__ r1 = r + K;
+    const double* __restrict__ r2 = r + 2 * static_cast<size_t>(K);
+    const double* __restrict__ r3 = r + 3 * static_cast<size_t>(K);
+    for (unsigned i = 0; i < d; ++i) {
+        const double z0 = z[0][i], z1 = z[1][i], z2 = z[2][i], z3 = z[3][i];
+        double* __restrict__ row = sums + static_cast<size_t>(i) * K;
+        for (unsigned k = 0; k < K; ++k) row[k] += z0 * r0[k] + z1 * r1[k] + z2 * r2[k] + z3 * r3[k];
+    }
+}
 
 // Add runs of at most kCellsPerTask positions covering [begin, end).
 void append_runs(std::vector<CellRun>& runs, unsigned group, unsigned begin, unsigned end) {
@@ -89,7 +111,7 @@ inline float accumulate(const float* x, unsigned n) {
 }
 
 // Dot product of n floats in eight partial sums combined in a fixed order,
-// so the loop vectorizes and the result does not depend on the BLAS library.
+// so the loop vectorizes and every platform sums in the same order.
 inline float dot(const float* a, const float* b, unsigned n) {
     float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     unsigned i = 0;
@@ -190,18 +212,20 @@ void Harmony::run_tasks(size_t n_tasks, size_t work, F&& fn) const {
     run_tasks_on_threads(n_tasks, work, [&](size_t t, unsigned) { fn(t); });
 }
 
-// sums(:, r) = sum of X(:, cells[i]) over the positions i of run r, for runs [first, last).
+// sums(:, r) = sum of X(:, cells[i]) over the positions i of run r, for runs
+// [first, last), accumulated in the precision of sums (float or double).
+template <class T>
 void Harmony::sum_runs(const MATTYPE& X, const std::vector<unsigned>& cells,
-                       const std::vector<CellRun>& runs, size_t first, size_t last, MATTYPE& sums) {
+                       const std::vector<CellRun>& runs, size_t first, size_t last, arma::Mat<T>& sums) {
     const unsigned n_rows = X.n_rows;
     if (sums.n_rows != n_rows || sums.n_cols < runs.size()) sums.set_size(n_rows, runs.size());
     size_t work = 0;
     for (size_t r = first; r < last; ++r) work += runs[r].end - runs[r].begin;
-    ThreadScratch scratch(pool_threads(), n_rows);
+    ThreadScratch<T> scratch(pool_threads(), n_rows);
     run_tasks_on_threads(last - first, work * n_rows, [&](size_t t, unsigned thread) {
         const CellRun& run = runs[first + t];
-        float* acc = scratch.get(thread);
-        std::fill(acc, acc + n_rows, 0.0f);
+        T* acc = scratch.get(thread);
+        std::fill(acc, acc + n_rows, T(0));
         for (unsigned i = run.begin; i < run.end; ++i) {
             const float* x = X.colptr(cells[i]);
             for (unsigned k = 0; k < n_rows; ++k) acc[k] += x[k];
@@ -210,20 +234,14 @@ void Harmony::sum_runs(const MATTYPE& X, const std::vector<unsigned>& cells,
     });
 }
 
-// Scale each column to unit L2 norm, exactly as arma::normalise(X, 2, 0).
+// Scale each column to unit L2 norm.
 void Harmony::normalise_columns(MATTYPE& X) {
     const unsigned n_rows = X.n_rows;
     const unsigned n_cols = X.n_cols;
     run_tasks(n_chunks(n_cols), size_t(n_rows) * n_cols, [&](size_t t) {
         const unsigned j0 = t * kCellsPerTask;
         const unsigned j1 = std::min(n_cols, j0 + kCellsPerTask);
-        for (unsigned j = j0; j < j1; ++j) {
-            float* x = X.colptr(j);
-            const VECTYPE column(x, n_rows, false, true);
-            const float norm_a = arma::norm(column, 2);
-            const float norm_b = (norm_a != 0.0f) ? norm_a : 1.0f;
-            for (unsigned i = 0; i < n_rows; ++i) x[i] = x[i] / norm_b;
-        }
+        for (unsigned j = j0; j < j1; ++j) scale_to_unit_length(X.colptr(j), n_rows);
     });
 }
 
@@ -595,9 +613,13 @@ Harmony::Harmony(
     if (lambda_in(0) < 0) {
         lambda_estimation = true;
         lambda.zeros(B + 1);
+        if (!(std::isfinite(alpha_in) && alpha_in >= 0))
+            throw std::invalid_argument("alpha must be finite and not negative");
     } else {
         lambda_estimation = false;
         lambda = arma::conv_to<VECTYPE>::from(lambda_in);
+        if (!lambda_in.is_finite() || lambda_in.min() < 0)
+            throw std::invalid_argument("lamb must be finite and not negative");
     }
 
     if (B_vec.size() > 1) {
@@ -786,7 +808,8 @@ void Harmony::rebuild_O_E() {
     });
     VECTYPE totals(K, arma::fill::zeros);
     for (size_t t = 0; t < n_tasks; ++t) totals += task_sums.col(t);
-    E = totals * Pr_b.t();
+    for (int b = 0; b < B; ++b)
+        for (int k = 0; k < K; ++k) E(k, b) = totals(k) * Pr_b(b);
 
     MATTYPE sums;
     sum_runs(R, batch_groups.cells, batch_groups.runs, 0, batch_groups.runs.size(), sums);
@@ -797,7 +820,7 @@ void Harmony::rebuild_O_E() {
 
 void Harmony::init_cluster() {
     Y = kmeans_init(Z_corr);
-    Y = arma::normalise(Y, 2, 0);
+    normalise_columns(Y);
 
     assign_without_diversity("initialization");
     rebuild_O_E();
@@ -1182,87 +1205,106 @@ bool Harmony::check_convergence(int i_type) {
  * sum of R(k, :) over those cells and z_all(k, :) the matching weighted
  * coordinate sum, accumulated over fixed chunks of cells and added in order.
  */
-void Harmony::multi_covariate_totals(const arma::Mat<unsigned char>& kept, MATTYPE& z_all, VECTYPE& cov_sum) {
+void Harmony::multi_covariate_totals(const arma::Mat<unsigned char>& kept, arma::mat& z_all, arma::vec& cov_sum) {
     const unsigned n_cov = n_covariates;
     const size_t sum_size = static_cast<size_t>(K) * d;
     // At most about 1024 tasks, so the per-task sums stay small.
     const unsigned task_cells = std::max<unsigned>(kCellsPerTask, (static_cast<unsigned>(N) + 1023) / 1024);
     const size_t n_tasks = (static_cast<size_t>(N) + task_cells - 1) / task_cells;
-    MATTYPE partials(sum_size + K, n_tasks);
-    ThreadScratch scratch(pool_threads(), sum_size + 2 * static_cast<size_t>(K));
+    arma::mat partials(sum_size + K, n_tasks);
+    ThreadScratch<double> scratch(pool_threads(), sum_size + (1 + kCellsPerPass) * static_cast<size_t>(K));
     const unsigned char* kept_mem = kept.memptr();
     run_tasks_on_threads(n_tasks, size_t(N) * K * (d + n_cov), [&](size_t t, unsigned thread) {
         const unsigned j0 = t * task_cells;
         const unsigned j1 = std::min<unsigned>(N, j0 + task_cells);
         // acc(k, i) holds the K x d coordinate sums, then K totals, then the
-        // cell's masked assignments.
-        float* acc = scratch.get(thread);
-        float* totals = acc + sum_size;
-        float* masked = totals + K;
-        std::fill(acc, acc + sum_size + K, 0.0f);
-        for (unsigned j = j0; j < j1; ++j) {
-            const unsigned* batches = &cell_batches[static_cast<size_t>(j) * n_cov];
-            const float* r = R.colptr(j);
-            for (int k = 0; k < K; ++k) {
-                unsigned char any = 0;
-                for (unsigned c = 0; c < n_cov; ++c) any |= kept_mem[static_cast<size_t>(batches[c]) * K + k];
-                masked[k] = any ? r[k] : 0.0f;
-                totals[k] += masked[k];
+        // masked assignments of kCellsPerPass cells.
+        double* acc = scratch.get(thread);
+        double* totals = acc + sum_size;
+        double* masked = totals + K;
+        std::fill(acc, acc + sum_size + K, 0.0);
+        const float* z[kCellsPerPass];
+        for (unsigned j = j0; j < j1; j += kCellsPerPass) {
+            for (unsigned c = 0; c < kCellsPerPass; ++c) {
+                double* m = masked + static_cast<size_t>(c) * K;
+                z[c] = Z_orig.colptr(j);
+                if (j + c >= j1) {
+                    std::fill(m, m + K, 0.0);
+                    continue;
+                }
+                const unsigned* batches = &cell_batches[static_cast<size_t>(j + c) * n_cov];
+                const float* r = R.colptr(j + c);
+                z[c] = Z_orig.colptr(j + c);
+                for (int k = 0; k < K; ++k) {
+                    unsigned char any = 0;
+                    for (unsigned b = 0; b < n_cov; ++b) any |= kept_mem[static_cast<size_t>(batches[b]) * K + k];
+                    m[k] = any ? r[k] : 0.0f;
+                    totals[k] += m[k];
+                }
             }
-            const float* z = Z_orig.colptr(j);
-            for (int i = 0; i < d; ++i) {
-                const float z_i = z[i];
-                float* __restrict__ row = acc + static_cast<size_t>(i) * K;
-                const float* __restrict__ m = masked;
-                for (int k = 0; k < K; ++k) row[k] += z_i * m[k];
-            }
+            add_outer_products(acc, K, d, masked, z);
         }
         std::copy(acc, acc + sum_size + K, partials.colptr(t));
     });
     z_all.zeros(K, d);
     cov_sum.zeros(K);
     for (size_t t = 0; t < n_tasks; ++t) {
-        const float* part = partials.colptr(t);
-        float* sums = z_all.memptr();
+        const double* part = partials.colptr(t);
+        double* sums = z_all.memptr();
         for (size_t i = 0; i < sum_size; ++i) sums[i] += part[i];
         for (int k = 0; k < K; ++k) cov_sum[k] += part[sum_size + k];
     }
 }
 
 // RZ[b](k, i) = sum of R(k, j) * Z_orig(i, j) over the cells j of batch b,
-// for each batch in use: every cluster's R-weighted coordinate sums. Each run
-// of a batch's cells adds rank-one updates to a K x d sum; a batch split over
-// several runs adds its runs' sums in run order.
-void Harmony::batch_coordinate_sums(std::vector<MATTYPE>& RZ, const std::vector<char>& used) {
-    const size_t sum_size = static_cast<size_t>(K) * d;
-    MATTYPE partials(sum_size, n_ridge_partials);
+// and RZ[b](k, d) = sum of R(k, j), for each batch in use: every cluster's
+// R-weighted coordinate sums and totals. Each run of a batch's cells adds
+// rank-one updates to a K x (d + 1) sum; a batch split over several runs adds
+// its runs' sums in run order. The sums are accumulated in double (see
+// moe_correct_ridge).
+void Harmony::batch_coordinate_sums(std::vector<arma::mat>& RZ, const std::vector<char>& used) {
+    const size_t sum_size = static_cast<size_t>(K) * (d + 1);
+    arma::mat partials(sum_size, n_ridge_partials);
     for (int b = 0; b < B; ++b)
-        if (used[b]) RZ[b].set_size(K, d);
-    ThreadScratch scratch(pool_threads(), sum_size);
+        if (used[b]) RZ[b].set_size(K, d + 1);
+    ThreadScratch<double> scratch(pool_threads(), sum_size + kCellsPerPass * static_cast<size_t>(K));
     run_tasks_on_threads(ridge_runs.size(), size_t(N) * n_covariates * sum_size, [&](size_t r, unsigned thread) {
         const CellRun& run = ridge_runs[r];
         if (!used[run.group]) return;
-        float* acc = scratch.get(thread);
-        std::fill(acc, acc + sum_size, 0.0f);
-        for (unsigned t = run.begin; t < run.end; ++t) {
-            const unsigned j = batch_groups.cells[t];
-            const float* z = Z_orig.colptr(j);
-            const float* __restrict__ r_col = R.colptr(j);
-            for (int i = 0; i < d; ++i) {
-                const float z_i = z[i];
-                float* __restrict__ row = acc + static_cast<size_t>(i) * K;
-                for (int k = 0; k < K; ++k) row[k] += z_i * r_col[k];
+        // acc(k, i) holds the K x d coordinate sums, then K totals, then the
+        // assignments of kCellsPerPass cells.
+        double* acc = scratch.get(thread);
+        double* totals = acc + static_cast<size_t>(K) * d;
+        double* r_cells = acc + sum_size;
+        std::fill(acc, acc + sum_size, 0.0);
+        const float* z[kCellsPerPass];
+        for (unsigned t = run.begin; t < run.end; t += kCellsPerPass) {
+            for (unsigned c = 0; c < kCellsPerPass; ++c) {
+                double* r_c = r_cells + static_cast<size_t>(c) * K;
+                if (t + c >= run.end) {
+                    z[c] = z[0];
+                    std::fill(r_c, r_c + K, 0.0);
+                    continue;
+                }
+                const unsigned j = batch_groups.cells[t + c];
+                const float* r_j = R.colptr(j);
+                z[c] = Z_orig.colptr(j);
+                for (int k = 0; k < K; ++k) {
+                    r_c[k] = r_j[k];
+                    totals[k] += r_c[k];
+                }
             }
+            add_outer_products(acc, K, d, r_cells, z);
         }
-        float* out = ridge_partial[r] < 0 ? RZ[run.group].memptr() : partials.colptr(ridge_partial[r]);
+        double* out = ridge_partial[r] < 0 ? RZ[run.group].memptr() : partials.colptr(ridge_partial[r]);
         std::copy(acc, acc + sum_size, out);
     });
     std::vector<char> started(B, 0);
     for (size_t r = 0; r < ridge_runs.size(); ++r) {
         const unsigned b = ridge_runs[r].group;
         if (ridge_partial[r] < 0 || !used[b]) continue;
-        const float* part = partials.colptr(ridge_partial[r]);
-        float* sum = RZ[b].memptr();
+        const double* part = partials.colptr(ridge_partial[r]);
+        double* sum = RZ[b].memptr();
         if (!started[b]) std::copy(part, part + sum_size, sum);
         else for (size_t i = 0; i < sum_size; ++i) sum[i] += part[i];
         started[b] = 1;
@@ -1322,6 +1364,235 @@ void Harmony::apply_corrections(const std::vector<MATTYPE>& M) {
     });
 }
 
+// One thread's scratch space for solve_ridge_cluster, sized for the largest
+// system and allocated before the clusters are solved in parallel. Each
+// allocation is padded at both ends, so threads never share a cache line.
+struct RidgeWorkspace {
+    static constexpr size_t kPad = 32;
+
+    RidgeWorkspace(unsigned max_dense, unsigned max_diag, unsigned d, unsigned n_batches)
+        : values_(2 * kPad + size_t(max_dense) * (max_dense + max_diag + d) + size_t(max_diag) * (d + 1) + d),
+          slots_(2 * kPad + 2 * size_t(n_batches), -1) {
+        double* next = values_.data() + kPad;
+        auto take = [&next](size_t n) {
+            double* p = next;
+            next += n;
+            return p;
+        };
+        S = take(size_t(max_dense) * max_dense);
+        C = take(size_t(max_dense) * max_diag);
+        rhs_dense = take(size_t(d) * max_dense);
+        D = take(max_diag);
+        rhs_diag = take(size_t(d) * max_diag);
+        column = take(d);
+        dense_slot = slots_.data() + kPad;
+        diag_slot = dense_slot + n_batches;
+    }
+    RidgeWorkspace(const RidgeWorkspace&) = delete;
+    RidgeWorkspace& operator=(const RidgeWorkspace&) = delete;
+    RidgeWorkspace(RidgeWorkspace&&) = default;
+
+    double* S;          // dense block, then its Cholesky factor (max_dense x max_dense)
+    double* C;          // coupling of the dense and diagonal blocks (max_dense x max_diag)
+    double* rhs_dense;  // right-hand side of the dense rows, then W_dense (d x max_dense)
+    double* D;          // diagonal block (max_diag)
+    double* rhs_diag;   // right-hand side of the diagonal rows (d x max_diag)
+    double* column;     // one coefficient column (d)
+    int* dense_slot;    // row of each batch in the dense block (>= 1), or -1
+    int* diag_slot;     // row of each batch in the diagonal block (>= 0), or -1
+
+private:
+    std::vector<double> values_;
+    std::vector<int> slots_;
+};
+
+// Solve cluster k's ridge system and store its coefficients: the centroid
+// Y(:, k) and each kept batch's correction direction M[b](:, k).
+//
+// The system has one row for the intercept and one per kept batch:
+//
+//   [ total  O_k'               ] + diag(penalties)
+//   [ O_k    diag(O_k) + overlap ]
+//
+// where overlap holds the cells shared by kept batches of different
+// covariates. The batches of diag_covariate form a diagonal block D with
+// coupling C to the dense block A (the intercept and the other covariates'
+// batches). Eliminating D leaves the Schur complement S = A - C D^-1 C', a
+// single number with one covariate (the arrowhead inverse R harmony uses).
+// S is factored by Cholesky in double precision.
+//
+// With lamb (or alpha) zero the system is singular when the kept batches of
+// a covariate cover every cell, because the intercept row is then the sum of
+// their rows. The sums are accumulated in double, so a pivot of such a
+// system is zero up to rounding, about 1e-15 times the cluster's total
+// weight (the largest diagonal entry). A small positive lamb leaves a pivot
+// of about lamb times the number of kept batches, which the double-precision
+// solve handles accurately. Pivots below 1e-10 times the largest diagonal
+// entry are reported as singular.
+void Harmony::solve_ridge_cluster(unsigned k, unsigned diag_covariate, const std::vector<unsigned>& keep,
+                                  const std::vector<arma::mat>& RZ, const arma::mat& z_all,
+                                  const arma::vec& cov_sum, const std::vector<arma::mat>& pair_sums,
+                                  RidgeWorkspace& ws, std::vector<MATTYPE>& M) {
+    const unsigned n_keep = keep.size();
+    // Penalties: alpha * E(k, b) when lambda is estimated, otherwise
+    // lambda(b + 1). The intercept is penalized only by a fixed lambda(0)
+    // when every batch is kept.
+    auto penalty = [&](unsigned b) {
+        return static_cast<double>(lambda_estimation ? alpha * E.at(k, b) : lambda.at(b + 1));
+    };
+    const double intercept_penalty =
+        (!lambda_estimation && n_keep == static_cast<unsigned>(B)) ? static_cast<double>(lambda.at(0)) : 0.0;
+
+    unsigned n = 1, m = 0;
+    for (unsigned b : keep) {
+        if (batch_covariate[b] == diag_covariate) ws.diag_slot[b] = m++;
+        else ws.dense_slot[b] = n++;
+    }
+    // S (n x n), C (n x m) and D (m) are column-major. Column x of
+    // rhs_dense (d x n) and column j of rhs_diag (d x m) hold the right-hand
+    // side of dense row x and diagonal row j.
+    double* S = ws.S;
+    double* C = ws.C;
+    double* D = ws.D;
+    double* rhs_dense = ws.rhs_dense;
+    double* rhs_diag = ws.rhs_diag;
+    std::fill(S, S + static_cast<size_t>(n) * n, 0.0);
+    std::fill(C, C + static_cast<size_t>(n) * m, 0.0);
+    std::fill(rhs_dense, rhs_dense + d, 0.0);
+
+    double total = 0.0;
+    for (unsigned b : keep) {
+        const double o = RZ[b].at(k, d);
+        total += o;
+        double* rhs;
+        if (ws.diag_slot[b] >= 0) {
+            const unsigned j = ws.diag_slot[b];
+            C[static_cast<size_t>(j) * n] = o;
+            D[j] = o + penalty(b);
+            rhs = rhs_diag + static_cast<size_t>(j) * d;
+        } else {
+            const unsigned x = ws.dense_slot[b];
+            S[x] = o;
+            S[static_cast<size_t>(x) * n] = o;
+            S[static_cast<size_t>(x) * n + x] = o + penalty(b);
+            rhs = rhs_dense + static_cast<size_t>(x) * d;
+        }
+        for (int i = 0; i < d; ++i) rhs[i] = RZ[b].at(k, i);
+    }
+
+    if (n_covariates > 1) {
+        // Count each cell once in the intercept, even if it belongs to
+        // several kept batches, and add the overlap of kept batches.
+        S[0] = cov_sum.at(k);
+        for (int i = 0; i < d; ++i) rhs_dense[i] = z_all.at(k, i);
+        for (size_t p = 0; p < covariate_pairs.size(); ++p) {
+            const CovariatePair& pair = covariate_pairs[p];
+            for (size_t q = 0; q < pair.batch_a.size(); ++q) {
+                const unsigned a = pair.batch_a[q], b = pair.batch_b[q];
+                const bool a_dense = ws.dense_slot[a] > 0, b_dense = ws.dense_slot[b] > 0;
+                if (!(a_dense || ws.diag_slot[a] >= 0) || !(b_dense || ws.diag_slot[b] >= 0)) continue;
+                const double overlap = pair_sums[p].at(k, q);
+                if (a_dense && b_dense) {
+                    S[static_cast<size_t>(ws.dense_slot[a]) * n + ws.dense_slot[b]] += overlap;
+                    S[static_cast<size_t>(ws.dense_slot[b]) * n + ws.dense_slot[a]] += overlap;
+                } else if (a_dense) {
+                    C[static_cast<size_t>(ws.diag_slot[b]) * n + ws.dense_slot[a]] += overlap;
+                } else if (b_dense) {
+                    C[static_cast<size_t>(ws.diag_slot[a]) * n + ws.dense_slot[b]] += overlap;
+                }
+            }
+        }
+    } else {
+        S[0] = total;
+        for (unsigned b : keep)
+            for (int i = 0; i < d; ++i) rhs_dense[i] += RZ[b].at(k, i);
+    }
+    S[0] += intercept_penalty;
+    double largest_diagonal = 0.0;
+    for (unsigned x = 0; x < n; ++x) largest_diagonal = std::max(largest_diagonal, S[static_cast<size_t>(x) * n + x]);
+
+    // Eliminate the diagonal block: S -= C D^-1 C' (lower triangle) and
+    // rhs_dense -= C D^-1 rhs_diag. Most couplings are zero when one
+    // covariate is nested in another, so those are skipped.
+    for (unsigned j = 0; j < m; ++j) {
+        const double* c = C + static_cast<size_t>(j) * n;
+        const double* r_j = rhs_diag + static_cast<size_t>(j) * d;
+        for (unsigned x = 0; x < n; ++x) {
+            if (c[x] == 0.0) continue;
+            const double scale = c[x] / D[j];
+            double* s_x = S + static_cast<size_t>(x) * n;
+            for (unsigned y = x; y < n; ++y) s_x[y] -= scale * c[y];
+            double* r_x = rhs_dense + static_cast<size_t>(x) * d;
+            for (int i = 0; i < d; ++i) r_x[i] -= scale * r_j[i];
+        }
+    }
+
+    // Cholesky factorization S = L L' in place (lower triangle).
+    const double min_pivot = 1e-10 * largest_diagonal;
+    for (unsigned c = 0; c < n; ++c) {
+        double* col = S + static_cast<size_t>(c) * n;
+        if (!(col[c] > min_pivot))
+            numerical_error("ridge correction", "ridge system is singular; lamb (or alpha) is zero or too small");
+        col[c] = std::sqrt(col[c]);
+        for (unsigned r = c + 1; r < n; ++r) col[r] /= col[c];
+        for (unsigned c2 = c + 1; c2 < n; ++c2) {
+            const double f = col[c2];
+            if (f == 0.0) continue;
+            double* col2 = S + static_cast<size_t>(c2) * n;
+            for (unsigned r = c2; r < n; ++r) col2[r] -= f * col[r];
+        }
+    }
+
+    // Solve L L' W = rhs_dense for all d columns at once; column x of
+    // rhs_dense becomes row x of W_dense.
+    for (unsigned c = 0; c < n; ++c) {
+        const double* col = S + static_cast<size_t>(c) * n;
+        double* b_c = rhs_dense + static_cast<size_t>(c) * d;
+        for (int i = 0; i < d; ++i) b_c[i] /= col[c];
+        for (unsigned r = c + 1; r < n; ++r) {
+            if (col[r] == 0.0) continue;
+            double* b_r = rhs_dense + static_cast<size_t>(r) * d;
+            for (int i = 0; i < d; ++i) b_r[i] -= col[r] * b_c[i];
+        }
+    }
+    for (unsigned c = n; c-- > 0;) {
+        const double* col = S + static_cast<size_t>(c) * n;
+        double* b_c = rhs_dense + static_cast<size_t>(c) * d;
+        for (unsigned r = c + 1; r < n; ++r) {
+            if (col[r] == 0.0) continue;
+            const double* w_r = rhs_dense + static_cast<size_t>(r) * d;
+            for (int i = 0; i < d; ++i) b_c[i] -= col[r] * w_r[i];
+        }
+        for (int i = 0; i < d; ++i) b_c[i] /= col[c];
+    }
+
+    // Store the coefficients: W_dense row 0 is the centroid; the diagonal
+    // block's rows follow from W_diag = D^-1 (rhs_diag - C' W_dense).
+    float* centroid = Y.colptr(k);
+    for (int i = 0; i < d; ++i) centroid[i] = static_cast<float>(rhs_dense[i]);
+    double* w = ws.column;
+    for (unsigned b : keep) {
+        float* out = M[b].colptr(k);
+        if (ws.diag_slot[b] >= 0) {
+            const unsigned j = ws.diag_slot[b];
+            const double* c = C + static_cast<size_t>(j) * n;
+            const double* r_j = rhs_diag + static_cast<size_t>(j) * d;
+            for (int i = 0; i < d; ++i) w[i] = r_j[i];
+            for (unsigned x = 0; x < n; ++x) {
+                if (c[x] == 0.0) continue;
+                const double* w_x = rhs_dense + static_cast<size_t>(x) * d;
+                for (int i = 0; i < d; ++i) w[i] -= c[x] * w_x[i];
+            }
+            for (int i = 0; i < d; ++i) out[i] = static_cast<float>(w[i] / D[j]);
+        } else {
+            const double* w_x = rhs_dense + static_cast<size_t>(ws.dense_slot[b]) * d;
+            for (int i = 0; i < d; ++i) out[i] = static_cast<float>(w_x[i]);
+        }
+        ws.dense_slot[b] = -1;
+        ws.diag_slot[b] = -1;
+    }
+}
+
 void Harmony::moe_correct_ridge() {
     const bool multiple_covariates = B_vec.size() > 1;
 
@@ -1357,19 +1628,23 @@ void Harmony::moe_correct_ridge() {
     }
 
     // Every cluster's R-weighted coordinate sums for each batch, in one pass
-    // over the cells instead of one pass per cluster.
+    // over the cells instead of one pass per cluster. These sums, and the
+    // totals below, are accumulated in double: with a small lamb the ridge
+    // system is nearly singular (the intercept is the sum of each covariate's
+    // batches), and float sums that disagree in their last digits would
+    // decide its solution.
     std::vector<char> used(B, 0);
     for (int k = 0; k < K; ++k)
         if (active[k])
             for (unsigned b : keeps[k]) used[b] = 1;
-    std::vector<MATTYPE> RZ(B);
+    std::vector<arma::mat> RZ(B);
     batch_coordinate_sums(RZ, used);
 
     // With several covariates, a cell belongs to one batch per covariate, so
     // the intercept terms and the overlap of kept batches need extra totals.
-    MATTYPE z_all;
-    VECTYPE cov_sum;
-    std::vector<MATTYPE> pair_sums(covariate_pairs.size());
+    arma::mat z_all;
+    arma::vec cov_sum;
+    std::vector<arma::mat> pair_sums(covariate_pairs.size());
     if (multiple_covariates) {
         arma::Mat<unsigned char> kept(K, B, arma::fill::zeros);
         for (int k = 0; k < K; ++k)
@@ -1377,7 +1652,7 @@ void Harmony::moe_correct_ridge() {
                 for (unsigned b : keeps[k]) kept(k, b) = 1;
         multi_covariate_totals(kept, z_all, cov_sum);
 
-        MATTYPE sums;
+        arma::mat sums;
         for (size_t p = 0; p < covariate_pairs.size(); ++p) {
             const CellGroups& groups = covariate_pairs[p].groups;
             sum_runs(R, groups.cells, groups.runs, 0, groups.runs.size(), sums);
@@ -1387,144 +1662,48 @@ void Harmony::moe_correct_ridge() {
         }
     }
 
-    // M[b](:, k) is the correction direction of batch b in cluster k.
-    std::vector<MATTYPE> M(B);
-    // Position of each kept batch in the dense block (>= 1; 0 is the
-    // intercept) or in the diagonal block (>= 0); -1 when not kept.
-    std::vector<int> dense_slot(B, -1), diag_slot(B, -1);
+    // The ridge system of each cluster has one row for the intercept and one
+    // per kept batch. The batches of the covariate with the most kept batches
+    // share no cells, so they form a diagonal block that solve_ridge_cluster
+    // eliminates first; the rest (the intercept and the other covariates'
+    // batches) is a small dense block. Find the largest blocks so that each
+    // thread's workspace can be set aside before the clusters are solved in
+    // parallel.
+    std::vector<unsigned> diag_covariate(K, 0);
+    unsigned max_dense = 1, max_diag = 0;
+    size_t work = 0;
     for (int k = 0; k < K; ++k) {
         if (!active[k]) continue;
-
-        const std::vector<unsigned>& keep = keeps[k];
-        unsigned n_keep = keep.size();
-        bool all_qualify = (n_keep == static_cast<unsigned>(B));
-
-        VECTYPE lamb_vec;
-        if (all_qualify) {
-            lamb_vec = lambda_estimation ? find_lambda(alpha, VECTYPE(E.row(k).t())) : lambda;
-        } else {
-            arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
-            if (lambda_estimation) {
-                VECTYPE Esub = VECTYPE(E.row(k).t());
-                Esub = Esub.rows(keep_batch);
-                lamb_vec = find_lambda(alpha, Esub);
-            } else {
-                VECTYPE ltmp(n_keep + 1);
-                ltmp(0) = 0;
-                ltmp.subvec(1, n_keep) = lambda.rows(keep_batch + 1);
-                lamb_vec = ltmp;
-            }
-        }
-
-        // The ridge system has one row for the intercept and one per kept batch:
-        //
-        //   cov = [ total  O_k'              ] + diag(lamb_vec)
-        //         [ O_k    diag(O_k) + overlap ]
-        //
-        // where overlap holds the cells shared by kept batches of different
-        // covariates. Batches of one covariate share no cells, so the rows of
-        // the covariate with the most kept batches form a diagonal block D.
-        // Eliminating D (a Schur complement) leaves a small dense system: a
-        // single equation when there is one covariate, which is the arrowhead
-        // inverse R harmony uses.
         std::vector<unsigned> kept_per_covariate(n_covariates, 0);
-        for (unsigned b : keep) kept_per_covariate[batch_covariate[b]]++;
-        const unsigned diag_covariate = std::max_element(kept_per_covariate.begin(), kept_per_covariate.end())
-                                        - kept_per_covariate.begin();
-        unsigned n_dense = 1, n_diag = 0;
-        for (unsigned b : keep) {
-            if (batch_covariate[b] == diag_covariate) diag_slot[b] = n_diag++;
-            else dense_slot[b] = n_dense++;
-        }
-
-        MATTYPE A(n_dense, n_dense, arma::fill::zeros);   // intercept and other covariates
-        MATTYPE C(n_dense, n_diag, arma::fill::zeros);    // coupling to the diagonal block
-        VECTYPE D(n_diag);
-        MATTYPE rhs_dense(n_dense, d), rhs_diag(n_diag, d);
-        VECTYPE Ok(n_keep);
-        for (unsigned i = 0; i < n_keep; ++i) {
-            const unsigned b = keep[i];
-            const float o = O(k, b);
-            Ok(i) = o;
-            if (diag_slot[b] >= 0) {
-                const unsigned j = diag_slot[b];
-                C(0, j) = o;
-                D(j) = o + lamb_vec(i + 1);
-                rhs_diag.row(j) = RZ[b].row(k);
-            } else {
-                const unsigned j = dense_slot[b];
-                A(0, j) = o;
-                A(j, 0) = o;
-                A(j, j) = o + lamb_vec(i + 1);
-                rhs_dense.row(j) = RZ[b].row(k);
-            }
-        }
-
-        if (multiple_covariates) {
-            // Count each cell once in the intercept, even if it belongs to
-            // several kept batches, and add the overlap of kept batches.
-            A(0, 0) = cov_sum(k);
-            rhs_dense.row(0) = z_all.row(k);
-            for (size_t p = 0; p < covariate_pairs.size(); ++p) {
-                const CovariatePair& pair = covariate_pairs[p];
-                for (size_t q = 0; q < pair.batch_a.size(); ++q) {
-                    const unsigned a = pair.batch_a[q], b = pair.batch_b[q];
-                    const bool a_dense = dense_slot[a] > 0, b_dense = dense_slot[b] > 0;
-                    if (!(a_dense || diag_slot[a] >= 0) || !(b_dense || diag_slot[b] >= 0)) continue;
-                    const float overlap = pair_sums[p](k, q);
-                    if (a_dense && b_dense) {
-                        A(dense_slot[a], dense_slot[b]) += overlap;
-                        A(dense_slot[b], dense_slot[a]) += overlap;
-                    } else if (a_dense) {
-                        C(dense_slot[a], diag_slot[b]) += overlap;
-                    } else if (b_dense) {
-                        C(dense_slot[b], diag_slot[a]) += overlap;
-                    }
-                }
-            }
-        } else {
-            A(0, 0) = accumulate(Ok.memptr(), n_keep);
-            VECTYPE z_sum_all(d, arma::fill::zeros);
-            for (unsigned b : keep) z_sum_all += RZ[b].row(k).t();
-            rhs_dense.row(0) = z_sum_all.t();
-        }
-        A(0, 0) += lamb_vec(0);
-
-        // Solve [A C; C' diag(D)] [W_dense; W_diag] = [rhs_dense; rhs_diag].
-        const MATTYPE C_over_D = C.each_row() / D.t();
-        const MATTYPE schur = A - C_over_D * C.t();
-        const MATTYPE rhs_reduced = rhs_dense - C_over_D * rhs_diag;
-        // A system too ill-conditioned for float32 (reciprocal condition
-        // number below machine epsilon) is reported instead of solved.
-        MATTYPE W_dense;
-        bool solved;
-        if (n_dense == 1) {
-            const float pivot = schur(0, 0);
-            solved = std::isfinite(pivot) && std::abs(pivot) > std::numeric_limits<float>::epsilon() * A(0, 0);
-            if (solved) W_dense = rhs_reduced / pivot;
-        } else {
-            solved = arma::solve(W_dense, schur, rhs_reduced, arma::solve_opts::no_approx);
-        }
-        if (!solved)
-            numerical_error("ridge correction", "ridge system is singular; lamb (or alpha) must be positive");
-        MATTYPE W_diag = rhs_diag - C.t() * W_dense;
-        W_diag.each_col() /= D;
-
-        Y.col(k) = W_dense.row(0).t();
-
-        for (unsigned b : keep) {
-            MATTYPE& correction = M[b];
-            if (correction.is_empty()) correction.zeros(d, K);
-            correction.col(k) = diag_slot[b] >= 0 ? W_diag.row(diag_slot[b]).t()
-                                                  : W_dense.row(dense_slot[b]).t();
-            dense_slot[b] = -1;
-            diag_slot[b] = -1;
-        }
+        for (unsigned b : keeps[k]) kept_per_covariate[batch_covariate[b]]++;
+        const unsigned c = std::max_element(kept_per_covariate.begin(), kept_per_covariate.end())
+                           - kept_per_covariate.begin();
+        const size_t n_diag = kept_per_covariate[c];
+        const size_t n_dense = 1 + keeps[k].size() - n_diag;
+        diag_covariate[k] = c;
+        max_dense = std::max<unsigned>(max_dense, n_dense);
+        max_diag = std::max<unsigned>(max_diag, n_diag);
+        work += n_dense * (n_dense + n_diag + d) * (n_dense + d) + n_diag * d;
     }
+
+    // M[b](:, k) is the correction direction of batch b in cluster k (zero
+    // when cluster k does not correct batch b).
+    std::vector<MATTYPE> M(B);
+    for (int b = 0; b < B; ++b)
+        if (used[b]) M[b].zeros(d, K);
+
+    std::vector<RidgeWorkspace> workspaces;
+    workspaces.reserve(pool_threads());
+    for (unsigned t = 0; t < pool_threads(); ++t) workspaces.emplace_back(max_dense, max_diag, d, B);
+    run_tasks_on_threads(K, work, [&](size_t k, unsigned thread) {
+        if (active[k])
+            solve_ridge_cluster(k, diag_covariate[k], keeps[k], RZ, z_all, cov_sum, pair_sums,
+                                workspaces[thread], M);
+    });
 
     apply_corrections(M);
 
-    Y = arma::normalise(Y, 2, 0);
+    normalise_columns(Y);
 }
 
 } // namespace harmony

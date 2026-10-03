@@ -61,32 +61,14 @@ nanobind_add_module(_harmony_cpp
     src/bindings.cpp
 )
 
-# Armadillo in header-only mode: call BLAS/LAPACK directly
-target_compile_definitions(_harmony_cpp PRIVATE ARMA_DONT_USE_WRAPPER)
+# Armadillo in header-only mode, without BLAS or LAPACK: the matrix products
+# and the small linear systems are computed in src/harmony.cpp, so nothing
+# needs to be linked.
+target_compile_definitions(_harmony_cpp PRIVATE ARMA_DONT_USE_WRAPPER ARMA_DONT_USE_BLAS ARMA_DONT_USE_LAPACK)
 target_include_directories(_harmony_cpp PRIVATE
     ${ARMADILLO_INCLUDE}
     ${CMAKE_SOURCE_DIR}/src
 )
-
-# Link BLAS/LAPACK
-if(APPLE)
-    target_link_libraries(_harmony_cpp PRIVATE "-framework Accelerate")
-else()
-    # Find OpenBLAS (provides both BLAS and LAPACK)
-    find_library(OPENBLAS_LIB openblas
-        PATHS /usr/lib64 /usr/lib /usr/local/lib
-              /usr/lib/x86_64-linux-gnu
-              /usr/lib/aarch64-linux-gnu)
-    if(OPENBLAS_LIB)
-        message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")
-        target_link_libraries(_harmony_cpp PRIVATE ${OPENBLAS_LIB})
-    else()
-        # Fallback: try generic BLAS/LAPACK
-        find_package(BLAS REQUIRED)
-        find_package(LAPACK REQUIRED)
-        target_link_libraries(_harmony_cpp PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-    endif()
-endif()
 
 # std::thread needs pthreads on Linux
 find_package(Threads REQUIRED)

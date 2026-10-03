@@ -137,8 +137,7 @@ public:
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_corr() const { return columns_as_rows(harmony->Z_corr); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_orig() const { return columns_as_rows(harmony->Z_orig); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const {
-        const MATTYPE Z_cos = arma::normalise(harmony->Z_corr, 2, 0);
-        return columns_as_rows(Z_cos);
+        return columns_as_rows(unit_length_columns(harmony->Z_corr));
     }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> R() const { return columns_as_rows(harmony->R); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }

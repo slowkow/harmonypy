@@ -10,7 +10,7 @@
 [zb]: https://img.shields.io/badge/DOI-10.5281/zenodo.4531400-blue
 [zen]: https://doi.org/10.5281/zenodo.4531400
 
-**harmonypy** is a Python package for the [Harmony] algorithm for integrating multiple high-dimensional datasets. It uses a C++ backend (Armadillo) for fast linear algebra, matching the [R harmony2 package][Harmony] step-by-step.
+**harmonypy** is a Python package for the [Harmony] algorithm for integrating multiple high-dimensional datasets. It uses a multithreaded C++ backend that follows the [R harmony2 package][Harmony] step-by-step.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/018f82a7-ebb2-47a7-a340-dc9427c51b50">
@@ -29,23 +29,13 @@ pip install harmonypy
 
 ### Building from source
 
-Building from source requires a C++ compiler, CMake, and a BLAS library:
-
-**macOS** (uses Apple Accelerate, no extra dependencies):
-
-```bash
-pip install .
-```
-
-**Linux** (requires OpenBLAS):
+Building from source requires a C++17 compiler and the Python development
+headers (`python3-dev` on Debian and Ubuntu, `python3-devel` on Fedora);
+harmonypy does not use BLAS or LAPACK. CMake is installed during the build if
+it is missing, and the Armadillo headers are downloaded (which needs network
+access) if Armadillo is not installed:
 
 ```bash
-# Debian/Ubuntu
-sudo apt install libopenblas-dev cmake
-
-# RHEL/Fedora
-sudo dnf install openblas-devel cmake
-
 pip install .
 ```
 
@@ -111,7 +101,7 @@ sc.tl.leiden(adata)
 | `ncores` | 0 | Threads (0 = every CPU available to the process) |
 | `lamb` | None | Ridge penalty (None = auto-estimate) |
 
-harmonypy runs on a pool of threads, so it uses every core without depending on a multi-threaded BLAS. `ncores` sets the number of threads; the default (0) uses every CPU available to the process, which on Linux respects CPU affinity (e.g. Slurm or `taskset`) but not container CPU quotas, so set `ncores` explicitly there. Results are identical for any `ncores`.
+harmonypy runs on its own pool of threads (it uses no BLAS, LAPACK or OpenMP). `ncores` sets the number of threads; the default (0) uses every CPU available to the process, which on Linux respects CPU affinity (e.g. Slurm or `taskset`) but not container CPU quotas, so set `ncores` explicitly there. Results are identical for any `ncores`.
 
 
 ## Performance
@@ -121,13 +111,13 @@ Run time with default settings on an Apple M1 Ultra (20 cores):
 ```
   Dataset                                   2.0.2    this version
   --------------------------------------- -------- ---------------
-  Small (3.5k cells, 3 donors)               0.20s           0.05s
-  Medium (69k cells, 11 batches)             4.92s           0.25s
-  Large (858k cells, 120 batches)           68.34s           1.89s
-  Large, by batch and sample (870 levels)  160.15s           3.20s
+  Small (3.5k cells, 3 donors)               0.20s           0.06s
+  Medium (69k cells, 11 batches)             4.92s           0.24s
+  Large (858k cells, 120 batches)           68.34s           1.92s
+  Large, by batch and sample (870 levels)  160.15s           3.05s
 ```
 
-On one thread (`ncores=1`) the large dataset takes 18.4 s; most of the
+On one thread (`ncores=1`) the large dataset takes 18.0 s; most of the
 speedup comes from doing less work, and the rest from using every core. On a
 6-core Linux laptop (AMD Ryzen 5 5560U), compared with the 2.0.2 wheel:
 
@@ -135,9 +125,9 @@ speedup comes from doing less work, and the rest from using every core. On a
   Dataset                                   2.0.2    this version
   --------------------------------------- -------- ---------------
   Small (3.5k cells, 3 donors)               0.35s           0.06s
-  Medium (69k cells, 11 batches)             6.66s           0.61s
-  Large (858k cells, 120 batches)          114.40s           5.81s
-  Large, by batch and sample (870 levels)  242.14s          12.43s
+  Medium (69k cells, 11 batches)             6.66s           0.60s
+  Large (858k cells, 120 batches)          114.40s           5.69s
+  Large, by batch and sample (870 levels)  242.14s           9.86s
 ```
 
 `scripts/compare_outputs.py` compares the results and run times of two builds.

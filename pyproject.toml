@@ -72,7 +72,6 @@ archs = ["x86_64", "aarch64"]
 # enough compiler and prebuilt NumPy wheels.
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
-before-all = "yum install -y epel-release && yum install -y openblas-devel lapack-devel || apk add openblas-dev lapack-dev"
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]

@@ -53,10 +53,14 @@ def read_tsv(path):
 
 
 def cols_to_matrix(cols, header):
-    """Extract numeric columns into a matrix (N x d)."""
+    """Extract numeric columns into a matrix (N x d).
+
+    An unnamed column holds row names, such as the row index that pandas
+    writes, so it is skipped.
+    """
     numeric = []
     for name in header:
-        if cols[name].dtype == np.float64:
+        if name and cols[name].dtype == np.float64:
             numeric.append(cols[name])
     return np.column_stack(numeric)
 

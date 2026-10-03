@@ -65,6 +65,10 @@
 - Wheel builds run all of `tests/test_harmony.py`, not just the pbmc test.
 - New tests check one ridge step against a direct float64 solve (1-3
   covariates), that results do not depend on `ncores`, and the input checks.
+- The local large-dataset run in `tests/test_harmony.py` read the row index
+  in the unnamed first column of `acute_myeloid_pcs.tsv.gz` as a 29th PC.
+  Unnamed columns are now skipped, so it corrects the 28 PCs, as R does; the
+  minimum per-PC correlation with the reference rose from 0.953 to 0.990.
 
 # 2.0.2 - 2026-09-16
 

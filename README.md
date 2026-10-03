@@ -117,9 +117,9 @@ Run time with default settings on an Apple M1 Ultra (20 cores):
   Large, by batch and sample (870 levels)  160.15s           3.05s
 ```
 
-On one thread (`ncores=1`) the large dataset takes 18.0 s; most of the
-speedup comes from doing less work, and the rest from using every core. On a
-6-core Linux laptop (AMD Ryzen 5 5560U), compared with the 2.0.2 wheel:
+On one thread (`ncores=1`) the large dataset takes 18.0 s, 3.8x faster than
+2.0.2; using all 20 cores brings it to 1.92 s. On a 6-core Linux laptop (AMD
+Ryzen 5 5560U), compared with the 2.0.2 wheel:
 
 ```
   Dataset                                   2.0.2    this version

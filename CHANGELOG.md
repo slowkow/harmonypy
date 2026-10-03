@@ -66,6 +66,8 @@
 - `scripts/compare_outputs.py` runs the same configurations with two builds
   and compares their results and run times.
 - Wheel builds run all of `tests/test_harmony.py`, not just the pbmc test.
+- Wheels are built with cibuildwheel 4.2, which adds CPython 3.14 wheels;
+  2.0.2 shipped none because cibuildwheel 2.21 predates 3.14.
 - New tests check one ridge step against a direct float64 solve (1-3
   covariates), that results do not depend on `ncores`, and the input checks.
 - The local large-dataset run in `tests/test_harmony.py` read the row index

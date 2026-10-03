@@ -43,7 +43,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - uses: pypa/cibuildwheel@v2.21
+    - uses: pypa/cibuildwheel@v4.2
       env:
         CIBW_ARCHS: ${{ matrix.cibw_archs }}
 

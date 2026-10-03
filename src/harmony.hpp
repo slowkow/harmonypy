@@ -156,10 +156,17 @@ private:
     // covariate_pairs: one entry per pair of covariates, in (a, b) order.
     CellGroups batch_groups;
     std::vector<CovariatePair> covariate_pairs;
+    // Runs of batch_groups for the ridge sums, and each run's partial sum
+    // (-1 when its batch has a single run).
+    std::vector<CellRun> ridge_runs;
+    std::vector<int> ridge_partial;
+    unsigned n_ridge_partials = 0;
     // Batch of each cell per covariate, cell-major: cell_batches[j * n_cov + c].
     std::vector<unsigned> cell_batches;
     // Covariate of each batch.
     std::vector<unsigned> batch_covariate;
+    // Cells sorted by their combination of batches.
+    std::vector<unsigned> cells_by_combination;
 
     // Scratch space for update_R, reused across blocks.
     std::vector<unsigned> block_cells;
@@ -193,7 +200,8 @@ private:
     MATTYPE kmeans_init(const MATTYPE& X);
     bool kmeans_lloyd_step(MATTYPE& means, const MATTYPE& X,
                            std::vector<unsigned>& assignment, CellGroups& members);
-    void gather_cells(const MATTYPE& src, const CellGroups& groups, unsigned group, MATTYPE& dst);
+    void batch_coordinate_sums(std::vector<MATTYPE>& RZ, const std::vector<char>& used);
+    void apply_corrections(const std::vector<MATTYPE>& M);
     void multi_covariate_totals(const arma::Mat<unsigned char>& kept, MATTYPE& z_all, VECTYPE& cov_sum);
     void check_state(const char* stage) const;
     void check_assignment_update() const;

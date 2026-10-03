@@ -272,6 +272,22 @@ def test_more_threads_than_cpus():
     assert np.isfinite(result.Z_corr).all()
 
 
+def test_z_cos_is_unit_length_z_corr():
+    """Z_cos is the corrected embedding with each cell scaled to unit length."""
+    rng = np.random.default_rng(6)
+    coordinates = rng.normal(size=(300, 5)) * 10
+    metadata = {"lab": rng.choice(["a", "b"], 300)}
+
+    result = hm.run_harmony(coordinates, metadata, "lab", nclust=5, verbose=False)
+
+    lengths = np.linalg.norm(result.Z_cos, axis=1)
+    np.testing.assert_allclose(lengths, 1.0, rtol=1e-6)
+    np.testing.assert_allclose(
+        result.Z_cos, result.Z_corr / np.linalg.norm(result.Z_corr, axis=1, keepdims=True),
+        rtol=1e-6, atol=1e-7,
+    )
+
+
 def test_read_only_input():
     """Arrays that cannot be written to, such as memory-mapped files, are accepted."""
     rng = np.random.default_rng(3)

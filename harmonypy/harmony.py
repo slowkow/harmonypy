@@ -286,7 +286,10 @@ class Harmony:
 
     @property
     def Z_cos(self):
-        """L2-normalized embedding matrix (N x d)."""
+        """Corrected embedding matrix with each cell scaled to unit length (N x d).
+
+        These are the cosine-normalized coordinates that Harmony clusters on.
+        """
         return self._cpp.Z_cos
 
     @property

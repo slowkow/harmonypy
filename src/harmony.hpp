@@ -136,7 +136,7 @@ public:
     arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_corr() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_orig() const { return arma::conv_to<arma::mat>::from(Z_orig); }
-    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(Z_corr); }
+    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(arma::normalise(Z_corr, 2, 0)); }
     arma::mat get_R() const { return arma::conv_to<arma::mat>::from(R); }
     arma::mat get_Y() const { return arma::conv_to<arma::mat>::from(Y); }
 

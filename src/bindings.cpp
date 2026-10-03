@@ -136,7 +136,10 @@ public:
     nb::ndarray<nb::numpy, double, nb::ndim<2>> result() const { return columns_as_rows(harmony->Z_corr); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_corr() const { return columns_as_rows(harmony->Z_corr); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_orig() const { return columns_as_rows(harmony->Z_orig); }
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const { return columns_as_rows(harmony->Z_corr); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const {
+        const MATTYPE Z_cos = arma::normalise(harmony->Z_corr, 2, 0);
+        return columns_as_rows(Z_cos);
+    }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> R() const { return columns_as_rows(harmony->R); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }
     int K() const { return harmony->K; }
@@ -232,7 +235,7 @@ NB_MODULE(_harmony_cpp, m) {
         .def_prop_ro("Z_orig", &HarmonyWrapper::Z_orig, nb::rv_policy::move,
                       "Original data matrix (N x d)")
         .def_prop_ro("Z_cos", &HarmonyWrapper::Z_cos, nb::rv_policy::move,
-                      "L2-normalized data matrix (N x d)")
+                      "Corrected data matrix with each cell scaled to unit length (N x d)")
         .def_prop_ro("R", &HarmonyWrapper::R, nb::rv_policy::move,
                       "Soft cluster assignments (N x K)")
         .def_prop_ro("Y", &HarmonyWrapper::Y, nb::rv_policy::move,

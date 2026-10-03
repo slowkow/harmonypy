@@ -43,6 +43,9 @@
   `RuntimeError` that says so.
 
 ### Fixed
+- `Harmony.Z_cos` now returns the corrected coordinates with each cell scaled
+  to unit length, as documented: the cosine-normalized coordinates Harmony
+  clusters on. Since 2.0.0 it returned the same values as `Z_corr`.
 - `batch_prop_cutoff` now compares the fraction of each batch's cells
   soft-assigned to a cluster with the cutoff, as R Harmony does, when
   correcting for more than one covariate. Since 2.0.0, each batch's cell count

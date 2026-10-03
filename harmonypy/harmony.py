@@ -18,6 +18,7 @@
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
 import logging
+import os
 
 # create logger
 logger = logging.getLogger('harmonypy')
@@ -28,6 +29,17 @@ if not logger.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+
+
+def _available_cores():
+    """Number of CPUs this process may run on.
+
+    Respects CPU affinity (e.g. Slurm, taskset) where the platform reports it.
+    """
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
 
 
 def run_harmony(
@@ -92,12 +104,13 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of threads for harmonypy's own computations. Default is 0
-        (one thread per available core). Results are the same for any
-        value. Matrix products use the BLAS library (Accelerate on macOS,
-        OpenBLAS on Linux), which has its own thread setting, such as
-        ``OPENBLAS_NUM_THREADS`` or ``VECLIB_MAXIMUM_THREADS``; set it
-        before importing harmonypy.
+        Number of threads for harmonypy's own computations. Default is 0:
+        one thread per CPU this process may use (its CPU affinity, where the
+        platform reports it). In a container limited by a CPU quota, set it
+        explicitly. Results are the same for any value. Matrix products use
+        the BLAS library (Accelerate on macOS, OpenBLAS on Linux), which has
+        its own thread setting, such as ``OPENBLAS_NUM_THREADS`` or
+        ``VECLIB_MAXIMUM_THREADS``; set it before importing harmonypy.
 
     Returns
     -------
@@ -232,7 +245,7 @@ def run_harmony(
         float(batch_prop_cutoff),
         verbose,
         random_state if random_state is not None else 0,
-        int(ncores),
+        int(ncores) if ncores > 0 else _available_cores(),
         logger.info,
     )
     return Harmony(cpp_harmony)

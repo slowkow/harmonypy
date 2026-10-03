@@ -18,7 +18,6 @@
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
 import logging
-import os
 
 # create logger
 logger = logging.getLogger('harmonypy')
@@ -93,8 +92,12 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of BLAS threads for matrix operations. Default is 0
-        (use all available cores). Set to 1 for single-threaded execution.
+        Number of threads for harmonypy's own computations. Default is 0
+        (one thread per available core). Results are the same for any
+        value. Matrix products use the BLAS library (Accelerate on macOS,
+        OpenBLAS on Linux), which has its own thread setting, such as
+        ``OPENBLAS_NUM_THREADS`` or ``VECLIB_MAXIMUM_THREADS``; set it
+        before importing harmonypy.
 
     Returns
     -------
@@ -201,8 +204,8 @@ def run_harmony(
         logger.info(f"  Data: {data_mat.shape[0]} PCs × {N} cells")
         logger.info(f"  Batch variables: {vars_use}")
 
-    # Prepare arrays for C++ backend
-    data_f64 = np.ascontiguousarray(data_mat.astype(np.float64))
+    # Prepare arrays for C++ backend: one row per cell
+    data_f64 = np.ascontiguousarray(data_mat.T, dtype=np.float64)
     batch_of_cell_c = np.ascontiguousarray(batch_of_cell)
 
     # Signal lambda estimation with sentinel [-1]
@@ -210,12 +213,6 @@ def run_harmony(
         lamb_cpp = np.array([-1.0], dtype=np.float64)
     else:
         lamb_cpp = lamb.astype(np.float64)
-
-    # Set BLAS thread count (Accelerate on macOS, OpenBLAS on Linux).
-    # ncores=0 means use all available cores (don't set env vars).
-    if ncores > 0:
-        os.environ["OMP_NUM_THREADS"] = str(ncores)
-        os.environ["OPENBLAS_NUM_THREADS"] = str(ncores)
 
     cpp_harmony = HarmonyCpp(
         data_f64,
@@ -235,6 +232,7 @@ def run_harmony(
         float(batch_prop_cutoff),
         verbose,
         random_state if random_state is not None else 0,
+        int(ncores),
         logger.info,
     )
     return Harmony(cpp_harmony)
@@ -269,22 +267,22 @@ class Harmony:
     @property
     def Z_corr(self):
         """Corrected embedding matrix (N x d)."""
-        return self._cpp.Z_corr.T
+        return self._cpp.Z_corr
 
     @property
     def Z_orig(self):
         """Original embedding matrix (N x d)."""
-        return self._cpp.Z_orig.T
+        return self._cpp.Z_orig
 
     @property
     def Z_cos(self):
         """L2-normalized embedding matrix (N x d)."""
-        return self._cpp.Z_cos.T
+        return self._cpp.Z_cos
 
     @property
     def R(self):
         """Soft cluster assignment matrix (N x K)."""
-        return self._cpp.R.T
+        return self._cpp.R
 
     @property
     def Y(self):
@@ -313,4 +311,4 @@ class Harmony:
 
     def result(self):
         """Return corrected data as NumPy array."""
-        return self._cpp.Z_corr.T
+        return self._cpp.Z_corr

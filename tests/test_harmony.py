@@ -185,6 +185,82 @@ def test_at_limit_leaves_coordinates_unchanged():
     np.testing.assert_array_equal(result.Z_corr, coordinates)
 
 
+def direct_ridge_correction(coordinates, labels, assignments, alpha=0.2, cutoff=1e-5):
+    """One ridge correction step, solved directly in float64 with an explicit inverse.
+
+    For each cluster, regress the coordinates on an intercept and one indicator
+    per kept group, weighting cells by their assignment to the cluster. Only
+    cells in at least one kept group count toward the intercept.
+    """
+    indicators = []
+    for values in labels:
+        _, codes = np.unique(values, return_inverse=True)
+        indicators.append(np.eye(codes.max() + 1)[codes])
+    design = np.hstack(indicators)
+    covariate = np.repeat(np.arange(len(indicators)), [g.shape[1] for g in indicators])
+    sizes = design.sum(0)
+    share_of_cells = (sizes / len(coordinates)).astype(np.float32)
+    original = coordinates.astype(np.float32).astype(np.float64)
+    corrected = original.copy()
+    for weights in assignments.T.astype(np.float64):
+        fraction = (design.T @ weights) / sizes
+        above = fraction > cutoff
+        levels = np.bincount(covariate[above], minlength=len(indicators))
+        keep = above & (levels[covariate] > 1)
+        if not keep.any():
+            continue
+        X = np.column_stack([design[:, keep].any(axis=1), design[:, keep]])
+        penalty = np.concatenate([[0.0], alpha * weights.sum() * share_of_cells[keep]])
+        weighted = X.T * weights
+        coef = np.linalg.inv(weighted @ X + np.diag(penalty)) @ (weighted @ original)
+        corrected -= (design[:, keep] * weights[:, None]) @ coef[1:]
+    return corrected
+
+
+@pytest.mark.parametrize("variables", [["lab"], ["lab", "day"], ["lab", "day", "kit"]])
+def test_ridge_correction_matches_direct_solution(variables):
+    """One correction step agrees with solving the ridge regression directly."""
+    rng = np.random.default_rng(1)
+    n_cells = 600
+    metadata = {
+        "lab": rng.choice(["a", "b", "c", "d"], n_cells),
+        "day": rng.choice(["Monday", "Tuesday", "Wednesday"], n_cells),
+        "kit": rng.choice(["v1", "v2"], n_cells),
+    }
+    coordinates = rng.normal(size=(n_cells, 4))
+    coordinates[metadata["lab"] == "a"] += 1.5
+    coordinates[metadata["day"] == "Monday"] -= 1.0
+
+    result = hm.run_harmony(
+        coordinates, metadata, variables, nclust=5,
+        max_iter_harmony=1, max_iter_kmeans=0, verbose=False,
+    )
+
+    expected = direct_ridge_correction(coordinates, [metadata[v] for v in variables], result.R)
+    np.testing.assert_allclose(result.Z_corr, expected, rtol=1e-4, atol=1e-4)
+
+
+def test_results_do_not_depend_on_ncores():
+    """Work is divided the same way for any number of threads."""
+    rng = np.random.default_rng(2)
+    n_cells = 3000
+    metadata = {
+        "lab": rng.choice(["a", "b", "c"], n_cells),
+        "day": rng.choice(["Monday", "Tuesday"], n_cells),
+    }
+    coordinates = rng.normal(size=(n_cells, 10))
+    coordinates[metadata["lab"] == "a"] += 1.0
+
+    results = [
+        hm.run_harmony(coordinates, metadata, ["lab", "day"], ncores=ncores, verbose=False)
+        for ncores in (1, 3)
+    ]
+
+    np.testing.assert_array_equal(results[0].Z_corr, results[1].Z_corr)
+    np.testing.assert_array_equal(results[0].R, results[1].R)
+    assert results[0].objective_harmony == results[1].objective_harmony
+
+
 def optimizer_case():
     data_mat = np.array(
         [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],

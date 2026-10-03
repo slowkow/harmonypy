@@ -1,5 +1,47 @@
 # Unreleased
 
+### Performance
+- The C++ backend is 20-50x faster on large datasets: on an Apple M1 Ultra,
+  858k cells corrected for batch take 1.9 s instead of 68 s, and corrected
+  for batch and sample (870 levels) 3.2 s instead of 160 s. Most of the
+  time was spent outside BLAS on a single core:
+  - The ridge correction made two passes over the data per cluster. It now
+    sums every cluster's terms in one pass over the cells, corrects each
+    cell once, and solves each cluster's system by eliminating the diagonal
+    block of the covariate with the most kept levels, instead of inverting a
+    matrix with one row per level when correcting for several covariates.
+  - Cluster assignments are updated in one pass per cell (logits, softmax,
+    objective terms and checks), without copying the assignment and distance
+    matrices twice per round.
+  - The k-means start repeats `arma::kmeans` exactly, in parallel.
+  - The extension was built with `-Os` (nanobind's default), which turned off
+    loop vectorization; it is now built with `-O3`.
+- The work, including the large matrix products, runs on a pool of
+  threads (no OpenMP), so speed no longer depends on a multi-threaded BLAS;
+  the Linux wheels bundle a single-threaded OpenBLAS. Results are identical
+  for any `ncores`. On one thread, the 858k-cell run takes 18.4 s.
+- Peak memory for the 858k-cell run is 1.9 GB instead of 2.8 GB.
+
+### Changed
+- `ncores` sets the number of threads harmonypy uses, at most the number of
+  CPUs available to the process; the default (0) uses all of them.
+  Previously it set `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS` after the
+  BLAS library had read them, which had no effect, and these variables are
+  no longer set.
+- The objective is accumulated in double precision. The float32 sums were
+  off by about 1% on 858k cells, and by much more for inputs with large
+  values, which could flip the convergence check when the objective barely
+  changes; such runs may now stop after a different number of iterations.
+  Otherwise the corrected coordinates match 2.0.2 to float32 rounding (on
+  datasets of 3.5k-1M cells with 1-3 covariates, the per-PC correlation with
+  2.0.2 is at least 0.99999, and the correlation with R Harmony is unchanged).
+- `Harmony.Z_corr`, `Z_orig`, `Z_cos` and `R` are now C-contiguous arrays.
+- Coordinates with NaN or infinite values raise `ValueError`; before, a NaN
+  could make the k-means start loop forever. A `sigma`, `theta` or `lamb`
+  of the wrong length raises `ValueError`, and a ridge system too
+  ill-conditioned to solve in float32 (for example with `lamb=0`) raises a
+  `RuntimeError` that says so.
+
 ### Fixed
 - `batch_prop_cutoff` now compares the fraction of each batch's cells
   soft-assigned to a cluster with the cutoff, as R Harmony does, when
@@ -13,6 +55,13 @@
   (1e-5); at 0.01, the minimum per-PC correlation with R improves from 0.923
   to 0.970. See `notebooks/pr56-batch-prop-cutoff/`. Thanks to @jkhales for
   finding and fixing this (#56).
+
+### Development
+- `scripts/compare_outputs.py` runs the same configurations with two builds
+  and compares their results and run times.
+- Wheel builds run all of `tests/test_harmony.py`, not just the pbmc test.
+- New tests check one ridge step against a direct float64 solve (1-3
+  covariates), that results do not depend on `ncores`, and the input checks.
 
 # 2.0.2 - 2026-09-16
 

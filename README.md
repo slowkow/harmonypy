@@ -108,23 +108,28 @@ sc.tl.leiden(adata)
 | `max_iter_harmony` | 10 | Maximum Harmony iterations |
 | `max_iter_kmeans` | 4 | K-means iterations per Harmony round |
 | `epsilon_harmony` | 1e-2 | Convergence threshold |
-| `ncores` | 0 | BLAS threads (0 = all cores) |
+| `ncores` | 0 | Threads (0 = every CPU available to the process) |
 | `lamb` | None | Ridge penalty (None = auto-estimate) |
 
-The `ncores` parameter controls BLAS threading (Accelerate on macOS, OpenBLAS on Linux). Default is 0 (use all available cores). Set `ncores=1` for single-threaded execution.
+harmonypy runs on a pool of threads, so it uses every core without depending on a multi-threaded BLAS. `ncores` sets the number of threads; the default (0) uses every CPU available to the process, which on Linux respects CPU affinity (e.g. Slurm or `taskset`) but not container CPU quotas, so set `ncores` explicitly there. Results are identical for any `ncores`.
 
 
 ## Performance
 
-The script in `tests/test_harmony.py` on an Apple M1 (2022) chip reports:
+Run time with default settings on an Apple M1 Ultra (20 cores):
 
 ```
-  Dataset                    Time    RSS delta
-  ---------------------- -------- ------------
-  Small (3.5k cells)        0.23s     45.2 MB
-  Medium (69k cells)        4.76s    262.3 MB
-  Large (858k cells)       29.29s   1969.5 MB
+  Dataset                                   2.0.2    this version
+  --------------------------------------- -------- ---------------
+  Small (3.5k cells, 3 donors)               0.20s           0.05s
+  Medium (69k cells, 11 batches)             4.92s           0.25s
+  Large (858k cells, 120 batches)           68.34s           1.89s
+  Large, by batch and sample (870 levels)  160.15s           3.20s
 ```
+
+On one thread (`ncores=1`) the large dataset takes 18.4 s; most of the
+speedup comes from doing less work, and the rest from using every core.
+`scripts/compare_outputs.py` compares the results and run times of two builds.
 
 
 ## Citation

@@ -35,10 +35,16 @@ if(ARMADILLO_FOUND)
 else()
     message(STATUS "System Armadillo not found, fetching headers...")
     include(FetchContent)
+    # DOWNLOAD_EXTRACT_TIMESTAMP exists from CMake 3.24; older versions would
+    # read it as part of the URL list and fail.
+    set(ARMADILLO_FETCH_OPTIONS)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        set(ARMADILLO_FETCH_OPTIONS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
     FetchContent_Declare(
         armadillo
         URL https://sourceforge.net/projects/arma/files/armadillo-14.2.2.tar.xz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        ${ARMADILLO_FETCH_OPTIONS}
     )
     # Use FetchContent_Populate (not MakeAvailable) to get headers only,
     # without adding Armadillo's install targets to the wheel.

@@ -43,6 +43,9 @@
   `RuntimeError` that says so.
 
 ### Fixed
+- Building from source with CMake older than 3.24 (e.g. Ubuntu 22.04's 3.22)
+  failed when Armadillo was not installed, because the header download used
+  a CMake 3.24 option.
 - `Harmony.Z_cos` now returns the corrected coordinates with each cell scaled
   to unit length, as documented: the cosine-normalized coordinates Harmony
   clusters on. Since 2.0.0 it returned the same values as `Z_corr`.

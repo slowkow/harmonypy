@@ -128,7 +128,18 @@ Run time with default settings on an Apple M1 Ultra (20 cores):
 ```
 
 On one thread (`ncores=1`) the large dataset takes 18.4 s; most of the
-speedup comes from doing less work, and the rest from using every core.
+speedup comes from doing less work, and the rest from using every core. On a
+6-core Linux laptop (AMD Ryzen 5 5560U), compared with the 2.0.2 wheel:
+
+```
+  Dataset                                   2.0.2    this version
+  --------------------------------------- -------- ---------------
+  Small (3.5k cells, 3 donors)               0.35s           0.06s
+  Medium (69k cells, 11 batches)             6.66s           0.61s
+  Large (858k cells, 120 batches)          114.40s           5.81s
+  Large, by batch and sample (870 levels)  242.14s          12.43s
+```
+
 `scripts/compare_outputs.py` compares the results and run times of two builds.
 
 

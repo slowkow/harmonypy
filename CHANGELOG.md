@@ -19,7 +19,9 @@
 - The work, including the large matrix products, runs on a pool of
   threads (no OpenMP), so speed no longer depends on a multi-threaded BLAS;
   the Linux wheels bundle a single-threaded OpenBLAS. Results are identical
-  for any `ncores`. On one thread, the 858k-cell run takes 18.4 s.
+  for any `ncores`. On one thread, the 858k-cell run takes 18.4 s. On a
+  6-core Linux laptop (AMD Ryzen 5 5560U), it takes 5.8 s instead of 114 s
+  with the 2.0.2 wheel.
 - Peak memory for the 858k-cell run is 1.9 GB instead of 2.8 GB.
 
 ### Changed
@@ -33,8 +35,9 @@
   values, which could flip the convergence check when the objective barely
   changes; such runs may now stop after a different number of iterations.
   Otherwise the corrected coordinates match 2.0.2 to float32 rounding (on
-  datasets of 3.5k-1M cells with 1-3 covariates, the per-PC correlation with
-  2.0.2 is at least 0.99999, and the correlation with R Harmony is unchanged).
+  datasets of 3.5k-1M cells with 1-3 covariates, on macOS and Linux, the
+  per-PC correlation with 2.0.2 is at least 0.99998, and the correlation with
+  R Harmony is unchanged).
 - `Harmony.Z_corr`, `Z_orig`, `Z_cos` and `R` are now C-contiguous arrays.
 - Coordinates with NaN or infinite values raise `ValueError`; before, a NaN
   could make the k-means start loop forever. A `sigma`, `theta` or `lamb`

@@ -69,7 +69,6 @@ public:
     MATTYPE Z_orig;
     MATTYPE Z_corr;
 
-    arma::Mat<arma::uword> batch_ids;   // n_cov x N: batch index per covariate
     int n_covariates;
     VECTYPE Pr_b;
     VECTYPE batch_sizes;
@@ -184,10 +183,18 @@ private:
     double update_entropy = 0.0;
     unsigned char update_flags = 0;
 
+    // The next update order, shuffled in the background. Declared last so
+    // the job is joined before the members it uses are destroyed.
+    std::vector<unsigned> next_order;
+    bool next_order_pending = false;
+    BackgroundJob next_shuffle;
+
     void allocate_buffers();
     void build_batch_structures(const arma::Mat<int64_t>& batch_of_cell);
     void build_covariate_pairs();
     template <class F> void run_tasks(size_t n_tasks, size_t work, F&& fn) const;
+    template <class F> void run_tasks_on_threads(size_t n_tasks, size_t work, F&& fn) const;
+    unsigned pool_threads() const { return pool ? pool->size() : 1; }
     void normalise_columns(MATTYPE& X);
     void assign_without_diversity(const char* stage);
     void sum_runs(const MATTYPE& X, const std::vector<unsigned>& cells,

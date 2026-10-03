@@ -104,13 +104,14 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of threads for harmonypy's own computations. Default is 0:
-        one thread per CPU this process may use (its CPU affinity, where the
-        platform reports it). In a container limited by a CPU quota, set it
-        explicitly. Results are the same for any value. Matrix products use
-        the BLAS library (Accelerate on macOS, OpenBLAS on Linux), which has
-        its own thread setting, such as ``OPENBLAS_NUM_THREADS`` or
-        ``VECLIB_MAXIMUM_THREADS``; set it before importing harmonypy.
+        Number of threads for harmonypy's own computations, at most the
+        number of CPUs this process may use (its CPU affinity, where the
+        platform reports it). Default is 0, which uses all of them; in a
+        container limited by a CPU quota, set it explicitly. Results are the
+        same for any value. Matrix products go to the BLAS library, which
+        keeps its own threads: Accelerate on macOS (``VECLIB_MAXIMUM_THREADS``,
+        set before starting Python); the Linux wheels bundle a
+        single-threaded OpenBLAS.
 
     Returns
     -------
@@ -245,7 +246,7 @@ def run_harmony(
         float(batch_prop_cutoff),
         verbose,
         random_state if random_state is not None else 0,
-        int(ncores) if ncores > 0 else _available_cores(),
+        min(int(ncores), _available_cores()) if ncores > 0 else _available_cores(),
         logger.info,
     )
     return Harmony(cpp_harmony)

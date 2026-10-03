@@ -8,27 +8,39 @@
 #ifndef HARMONY_THREAD_POOL_HPP
 #define HARMONY_THREAD_POOL_HPP
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
 #include <functional>
 #include <mutex>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace harmony {
 
-// Runs tasks 0..n-1 on the calling thread plus n_threads - 1 workers.
+// Runs tasks 0..n-1 on the calling thread plus up to n_threads - 1 workers.
 // Threads claim tasks dynamically, so a task must not depend on which thread
-// runs it. Callers combine per-task results in task order, which keeps every
-// result identical for any number of threads.
+// runs it, except to pick that thread's scratch space. Callers combine
+// per-task results in task order, which keeps every result identical for any
+// number of threads.
 class ThreadPool {
 public:
-    explicit ThreadPool(unsigned n_threads) : n_threads_(n_threads < 1 ? 1 : n_threads) {
-        workers_.reserve(n_threads_ - 1);
-        for (unsigned i = 1; i < n_threads_; ++i)
-            workers_.emplace_back([this] { worker_loop(); });
+    // Starts n_threads - 1 workers. If the system refuses to start one (for
+    // example a process or memory limit), the pool keeps the workers that
+    // started; results do not depend on how many there are.
+    explicit ThreadPool(unsigned n_threads) {
+        const unsigned wanted = n_threads < 1 ? 1 : n_threads;
+        workers_.reserve(wanted - 1);
+        try {
+            for (unsigned i = 1; i < wanted; ++i)
+                workers_.emplace_back([this, i] { worker_loop(i); });
+        } catch (...) {
+            // std::system_error (or std::bad_alloc) from starting a thread.
+        }
     }
 
     ~ThreadPool() {
@@ -43,14 +55,18 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
-    unsigned size() const { return n_threads_; }
+    // The number of threads that can run tasks, including the caller.
+    unsigned size() const { return static_cast<unsigned>(workers_.size()) + 1; }
 
-    // Call fn(i) for every i in [0, n_tasks) and return when all calls have
-    // finished. The first exception thrown by a task is rethrown here.
-    void parallel_for(size_t n_tasks, const std::function<void(size_t)>& fn) {
+    // Call fn(task, thread) for every task in [0, n_tasks) and return when all
+    // calls have finished. thread is 0 for the calling thread and below size()
+    // otherwise. At most n_tasks - 1 workers take part, and the caller waits
+    // only for those. The first exception thrown by a task is rethrown here.
+    void parallel_for(size_t n_tasks, const std::function<void(size_t, unsigned)>& fn) {
         if (n_tasks == 0) return;
-        if (workers_.empty() || n_tasks == 1) {
-            for (size_t i = 0; i < n_tasks; ++i) fn(i);
+        const unsigned helpers = static_cast<unsigned>(std::min<size_t>(workers_.size(), n_tasks - 1));
+        if (helpers == 0) {
+            for (size_t i = 0; i < n_tasks; ++i) fn(i, 0);
             return;
         }
         {
@@ -59,15 +75,19 @@ public:
             n_tasks_ = n_tasks;
             next_.store(0, std::memory_order_relaxed);
             error_ = nullptr;
-            busy_ = static_cast<unsigned>(workers_.size());
+            open_slots_ = helpers;
             ++generation_;
         }
-        start_cv_.notify_all();
-        run_tasks();
+        for (unsigned i = 0; i < helpers; ++i) start_cv_.notify_one();
+        run_tasks(0);
         std::exception_ptr error;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            done_cv_.wait(lock, [this] { return busy_ == 0; });
+            // Every task has been claimed. Workers that have not joined yet
+            // would find nothing to do, so stop admitting them and wait for
+            // the ones that joined.
+            open_slots_ = 0;
+            done_cv_.wait(lock, [this] { return active_ == 0; });
             fn_ = nullptr;
             error = error_;
         }
@@ -75,12 +95,12 @@ public:
     }
 
 private:
-    void run_tasks() {
+    void run_tasks(unsigned thread) {
         for (;;) {
             const size_t i = next_.fetch_add(1, std::memory_order_relaxed);
             if (i >= n_tasks_) return;
             try {
-                (*fn_)(i);
+                (*fn_)(i, thread);
             } catch (...) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!error_) error_ = std::current_exception();
@@ -90,35 +110,62 @@ private:
         }
     }
 
-    void worker_loop() {
+    void worker_loop(unsigned thread) {
         unsigned long long seen = 0;
+        std::unique_lock<std::mutex> lock(mutex_);
         for (;;) {
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                start_cv_.wait(lock, [&] { return stop_ || generation_ != seen; });
-                if (stop_) return;
-                seen = generation_;
-            }
-            run_tasks();
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (--busy_ == 0) done_cv_.notify_one();
-            }
+            start_cv_.wait(lock, [&] { return stop_ || (generation_ != seen && open_slots_ > 0); });
+            if (stop_) return;
+            seen = generation_;
+            --open_slots_;
+            ++active_;
+            lock.unlock();
+            run_tasks(thread);
+            lock.lock();
+            if (--active_ == 0) done_cv_.notify_one();
         }
     }
 
-    unsigned n_threads_;
     std::vector<std::thread> workers_;
     std::mutex mutex_;
     std::condition_variable start_cv_;
     std::condition_variable done_cv_;
-    const std::function<void(size_t)>* fn_ = nullptr;
+    const std::function<void(size_t, unsigned)>* fn_ = nullptr;
     size_t n_tasks_ = 0;
     std::atomic<size_t> next_{0};
     std::exception_ptr error_;
-    unsigned busy_ = 0;
+    unsigned open_slots_ = 0;   // workers that may still join the current call
+    unsigned active_ = 0;       // workers running tasks of the current call
     unsigned long long generation_ = 0;
     bool stop_ = false;
+};
+
+// Runs one job on a separate thread; wait() or the destructor joins it.
+// The job must not throw.
+class BackgroundJob {
+public:
+    BackgroundJob() = default;
+    ~BackgroundJob() { wait(); }
+    BackgroundJob(const BackgroundJob&) = delete;
+    BackgroundJob& operator=(const BackgroundJob&) = delete;
+
+    // Start job on its own thread. Returns false, without running it, if the
+    // system refuses to start a thread; the caller then runs the job itself.
+    template <class F> bool try_start(F&& job) {
+        wait();
+        try {
+            thread_ = std::thread(std::forward<F>(job));
+        } catch (const std::system_error&) {
+            return false;
+        }
+        return true;
+    }
+    void wait() {
+        if (thread_.joinable()) thread_.join();
+    }
+
+private:
+    std::thread thread_;
 };
 
 } // namespace harmony

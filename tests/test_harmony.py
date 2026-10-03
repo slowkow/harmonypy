@@ -261,6 +261,48 @@ def test_results_do_not_depend_on_ncores():
     assert results[0].objective_harmony == results[1].objective_harmony
 
 
+def test_more_threads_than_cpus():
+    """A larger ncores than there are CPUs is capped instead of failing."""
+    rng = np.random.default_rng(3)
+    coordinates = rng.normal(size=(300, 5))
+    metadata = {"lab": rng.choice(["a", "b"], 300)}
+
+    result = hm.run_harmony(coordinates, metadata, "lab", nclust=5, ncores=2**40, verbose=False)
+
+    assert np.isfinite(result.Z_corr).all()
+
+
+def test_read_only_input():
+    """Arrays that cannot be written to, such as memory-mapped files, are accepted."""
+    rng = np.random.default_rng(3)
+    coordinates = rng.normal(size=(300, 5))
+    coordinates.flags.writeable = False
+    metadata = {"lab": rng.choice(["a", "b"], 300)}
+
+    result = hm.run_harmony(coordinates, metadata, "lab", nclust=5, verbose=False)
+
+    assert np.isfinite(result.Z_corr).all()
+
+
+def test_nonfinite_input_raises():
+    """Missing coordinates raise an error instead of hanging the k-means start."""
+    coordinates = np.random.default_rng(4).normal(size=(300, 5))
+    coordinates[::2, 0] = np.nan
+    metadata = {"lab": np.repeat(["a", "b"], 150)}
+
+    with pytest.raises(ValueError, match="NaN"):
+        hm.run_harmony(coordinates, metadata, "lab", nclust=10, verbose=False)
+
+
+def test_sigma_must_match_nclust():
+    rng = np.random.default_rng(5)
+    coordinates = rng.normal(size=(300, 5))
+    metadata = {"lab": rng.choice(["a", "b"], 300)}
+
+    with pytest.raises(ValueError, match="sigma"):
+        hm.run_harmony(coordinates, metadata, "lab", nclust=10, sigma=np.full(5, 0.1), verbose=False)
+
+
 def optimizer_case():
     data_mat = np.array(
         [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],

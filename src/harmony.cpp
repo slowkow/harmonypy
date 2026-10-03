@@ -38,6 +38,23 @@ constexpr unsigned char kBadColumnSum = 2;
 
 inline size_t n_chunks(size_t n) { return (n + kCellsPerTask - 1) / kCellsPerTask; }
 
+// One scratch buffer of n floats per thread, each starting on its own
+// 128-byte line, so threads never share a cache line and workers never
+// allocate memory.
+class ThreadScratch {
+public:
+    ThreadScratch(unsigned n_threads, size_t n) : stride_((n + 31) / 32 * 32), buffer_(stride_ * n_threads + 32) {
+        const uintptr_t address = reinterpret_cast<uintptr_t>(buffer_.data());
+        offset_ = ((128 - address % 128) % 128) / sizeof(float);
+    }
+    float* get(unsigned thread) { return buffer_.data() + offset_ + stride_ * thread; }
+
+private:
+    size_t stride_;
+    std::vector<float> buffer_;
+    size_t offset_ = 0;
+};
+
 // Add runs of at most kCellsPerTask positions covering [begin, end).
 void append_runs(std::vector<CellRun>& runs, unsigned group, unsigned begin, unsigned end) {
     for (unsigned start = begin; start < end; start += kCellsPerTask)
@@ -142,14 +159,22 @@ ROWTYPE exponentiate_shifted_logits(MATTYPE& logits) {
 // Task helpers
 // =========================================================================
 
-// Run fn(t) for t in [0, n_tasks): on the pool, or inline when the work is small.
+// Run fn(t, thread) for t in [0, n_tasks): on the pool, or inline when the
+// work is small. thread (0 for the calling thread, below pool_threads())
+// selects the running thread's scratch space.
 template <class F>
-void Harmony::run_tasks(size_t n_tasks, size_t work, F&& fn) const {
+void Harmony::run_tasks_on_threads(size_t n_tasks, size_t work, F&& fn) const {
     if (!pool || pool->size() == 1 || n_tasks <= 1 || work < kMinParallelWork) {
-        for (size_t t = 0; t < n_tasks; ++t) fn(t);
+        for (size_t t = 0; t < n_tasks; ++t) fn(t, 0u);
         return;
     }
     pool->parallel_for(n_tasks, fn);
+}
+
+// Run fn(t) for t in [0, n_tasks), as run_tasks_on_threads.
+template <class F>
+void Harmony::run_tasks(size_t n_tasks, size_t work, F&& fn) const {
+    run_tasks_on_threads(n_tasks, work, [&](size_t t, unsigned) { fn(t); });
 }
 
 // sums(:, r) = sum of X(:, cells[i]) over the positions i of run r, for runs [first, last).
@@ -159,14 +184,16 @@ void Harmony::sum_runs(const MATTYPE& X, const std::vector<unsigned>& cells,
     if (sums.n_rows != n_rows || sums.n_cols < runs.size()) sums.set_size(n_rows, runs.size());
     size_t work = 0;
     for (size_t r = first; r < last; ++r) work += runs[r].end - runs[r].begin;
-    run_tasks(last - first, work * n_rows, [&](size_t t) {
+    ThreadScratch scratch(pool_threads(), n_rows);
+    run_tasks_on_threads(last - first, work * n_rows, [&](size_t t, unsigned thread) {
         const CellRun& run = runs[first + t];
-        float* acc = sums.colptr(first + t);
+        float* acc = scratch.get(thread);
         std::fill(acc, acc + n_rows, 0.0f);
         for (unsigned i = run.begin; i < run.end; ++i) {
             const float* x = X.colptr(cells[i]);
             for (unsigned k = 0; k < n_rows; ++k) acc[k] += x[k];
         }
+        std::copy(acc, acc + n_rows, sums.colptr(first + t));
     });
 }
 
@@ -257,20 +284,30 @@ MATTYPE Harmony::kmeans_init(const MATTYPE& X) {
     }
 
     std::set<unsigned> chosen;
-    VECTYPE random_numbers(N, arma::fill::none);
+    VECTYPE draws_now(N, arma::fill::none), draws_next(N, arma::fill::none);
     VECTYPE prob(N, arma::fill::none);
-    float* u = random_numbers.memptr();
     float* p = prob.memptr();
     const size_t n_tasks = n_chunks(N);
     std::vector<float> task_best(n_tasks);
     std::vector<unsigned> task_index(n_tasks);
+
+    // Each centroid needs N uniform draws, made in order from rng. With
+    // several threads, the next centroid's draws are made on another thread
+    // while this one is chosen; the draws are the same either way. A local
+    // generator keeps its state in registers.
+    std::mt19937 generator = rng;
+    auto draw = [&](VECTYPE& out) {
+        float* u = out.memptr();
+        for (int j = 0; j < N; ++j) u[j] = uniform01(generator);
+    };
+    BackgroundJob next_draws;
+    draw(draws_now);
     for (int i = 0; i < K; ++i) {
+        const bool more = i + 1 < K;
+        const bool drawing_ahead = more && n_threads > 1 && next_draws.try_start([&] { draw(draws_next); });
         const ROWTYPE similarity = Y.col(i).t() * X;
         const float* sim = similarity.memptr();
-        // A local copy keeps the generator state in registers.
-        std::mt19937 draws = rng;
-        for (int j = 0; j < N; ++j) u[j] = uniform01(draws);
-        rng = draws;
+        const float* u = draws_now.memptr();
 
         // prob = -log(u) / distance, and its maximum.
         run_tasks(n_tasks, size_t(N) * 16, [&](size_t t) {
@@ -318,13 +355,16 @@ MATTYPE Harmony::kmeans_init(const MATTYPE& X) {
         }
         chosen.insert(best);
         Y.col(i) = X.col(best);
-    }
 
-    // arma::kmeans fails on non-finite data and leaves the means empty.
-    if (!X.is_finite()) {
-        Y.reset();
-        return Y;
+        if (more) {
+            if (drawing_ahead) next_draws.wait();
+            else draw(draws_next);
+            draws_now.swap(draws_next);
+        }
     }
+    rng = generator;
+
+    // The constructor rejects non-finite input, so X is finite here.
     std::vector<unsigned> assignment(N);
     CellGroups members;
     for (int i = 0; i < 10; ++i) {
@@ -421,13 +461,15 @@ bool Harmony::kmeans_lloyd_step(MATTYPE& means, const MATTYPE& X,
 
     group_by_key(members, assignment.data(), n_cells, n_means);
     MATTYPE sums(n_dims, n_means);
-    run_tasks(n_means, size_t(n_cells) * n_dims, [&](size_t g) {
-        float* sum = sums.colptr(g);
+    ThreadScratch scratch(pool_threads(), n_dims);
+    run_tasks_on_threads(n_means, size_t(n_cells) * n_dims, [&](size_t g, unsigned thread) {
+        float* sum = scratch.get(thread);
         std::fill(sum, sum + n_dims, 0.0f);
         for (unsigned i = members.offsets[g]; i < members.offsets[g + 1]; ++i) {
             const float* x = X.colptr(members.cells[i]);
             for (unsigned k = 0; k < n_dims; ++k) sum[k] += x[k];
         }
+        std::copy(sum, sum + n_dims, sums.colptr(g));
     });
 
     MATTYPE new_means(n_dims, n_means);
@@ -507,18 +549,29 @@ Harmony::Harmony(
     log_fn(std::move(log_fn_in)),
     rng(random_state)
 {
-    // ncores <= 0 means one thread per available core.
-    unsigned threads = ncores > 0 ? static_cast<unsigned>(ncores) : std::thread::hardware_concurrency();
-    n_threads = std::max(1u, threads);
-    pool = std::make_unique<ThreadPool>(n_threads);
-
-    Z_orig = arma::conv_to<MATTYPE>::from(Z);
-
-    Pr_b = arma::conv_to<VECTYPE>::from(Pr_b_in);
     N = Z.n_cols;
     d = Z.n_rows;
     B = 0;
     for (auto v : B_vec) B += v;
+
+    // The kernels index these without bounds checks.
+    if (K < 1) throw std::invalid_argument("nclust must be at least 1");
+    if (!Z.is_finite()) throw std::invalid_argument("data_mat must not contain NaN or infinite values");
+    if (sigma_in.n_elem != static_cast<arma::uword>(K))
+        throw std::invalid_argument("sigma must have one value per cluster (nclust)");
+    if (theta_in.n_elem != static_cast<arma::uword>(B) || Pr_b_in.n_elem != static_cast<arma::uword>(B))
+        throw std::invalid_argument("theta must have one value per batch");
+    if (lambda_in.n_elem == 0 || (lambda_in(0) >= 0 && lambda_in.n_elem != static_cast<arma::uword>(B) + 1))
+        throw std::invalid_argument("lamb must have one value per batch");
+
+    // ncores <= 0 means one thread per available core. The pool may start
+    // fewer threads than requested if the system refuses more.
+    const unsigned requested = ncores > 0 ? static_cast<unsigned>(ncores) : std::thread::hardware_concurrency();
+    pool = std::make_unique<ThreadPool>(std::max(1u, requested));
+    n_threads = pool->size();
+
+    Z_orig = arma::conv_to<MATTYPE>::from(Z);
+    Pr_b = arma::conv_to<VECTYPE>::from(Pr_b_in);
 
     Z_corr = Z_orig;
     normalise_columns(Z_corr);
@@ -549,6 +602,7 @@ Harmony::Harmony(
     check_state("initialization");
     if (verbose && log_fn) log_fn("Initialization complete.");
     harmonize(max_iter_harmony, verbose);
+    next_shuffle.wait();
     check_state("return");
 
     // The worker threads are not needed once the result is ready.
@@ -561,7 +615,6 @@ void Harmony::build_batch_structures(const arma::Mat<int64_t>& batch_of_cell) {
     n_covariates = batch_of_cell.n_rows;
     if (n_covariates != static_cast<int>(B_vec.size()) || static_cast<int>(batch_of_cell.n_cols) != N)
         throw std::invalid_argument("batch_of_cell must be n_covariates x N");
-    batch_ids.set_size(n_covariates, N);
     cell_batches.resize(static_cast<size_t>(N) * n_covariates);
     for (int j = 0; j < N; ++j) {
         for (int c = 0; c < n_covariates; ++c) {
@@ -569,7 +622,6 @@ void Harmony::build_batch_structures(const arma::Mat<int64_t>& batch_of_cell) {
             const int64_t b = batch_of_cell(c, j);
             if (b < first || b >= static_cast<int64_t>(covariate_bounds[c]))
                 throw std::invalid_argument("batch index out of range for its covariate");
-            batch_ids(c, j) = static_cast<arma::uword>(b);
             cell_batches[static_cast<size_t>(j) * n_covariates + c] = static_cast<unsigned>(b);
         }
     }
@@ -653,10 +705,11 @@ void Harmony::build_covariate_pairs() {
 }
 
 void Harmony::allocate_buffers() {
-    dist_mat.zeros(K, N);
+    // init_cluster overwrites every element of dist_mat and R before use.
+    dist_mat.set_size(K, N);
+    R.set_size(K, N);
     O.zeros(K, B);
     E.zeros(K, B);
-    R.zeros(K, N);
     Y.zeros(d, K);
     log_div.zeros(K, B);
 }
@@ -696,15 +749,17 @@ void Harmony::assign_without_diversity(const char* stage) {
 void Harmony::rebuild_O_E() {
     const size_t n_tasks = n_chunks(N);
     MATTYPE task_sums(K, n_tasks);
-    run_tasks(n_tasks, size_t(N) * K, [&](size_t t) {
+    ThreadScratch scratch(pool_threads(), K);
+    run_tasks_on_threads(n_tasks, size_t(N) * K, [&](size_t t, unsigned thread) {
         const unsigned j0 = t * kCellsPerTask;
         const unsigned j1 = std::min<unsigned>(N, j0 + kCellsPerTask);
-        float* acc = task_sums.colptr(t);
+        float* acc = scratch.get(thread);
         std::fill(acc, acc + K, 0.0f);
         for (unsigned j = j0; j < j1; ++j) {
             const float* r = R.colptr(j);
             for (int k = 0; k < K; ++k) acc[k] += r[k];
         }
+        std::copy(acc, acc + K, task_sums.colptr(t));
     });
     VECTYPE totals(K, arma::fill::zeros);
     for (size_t t = 0; t < n_tasks; ++t) totals += task_sums.col(t);
@@ -913,10 +968,11 @@ void Harmony::reassign_block_runs(size_t n_lead_runs) {
     const unsigned n_cov = n_covariates;
     size_t n_cells = 0;
     for (size_t r = 0; r < n_lead_runs; ++r) n_cells += block_runs[r].end - block_runs[r].begin;
-    run_tasks(n_lead_runs, n_cells * K * 8, [&](size_t r) {
+    ThreadScratch scratch(pool_threads(), K);
+    run_tasks_on_threads(n_lead_runs, n_cells * K * 8, [&](size_t r, unsigned thread) {
         const CellRun& run = block_runs[r];
         const float* lead_div = log_div.colptr(run.group);
-        float* sums = run_sums.colptr(r);
+        float* sums = scratch.get(thread);
         std::fill(sums, sums + K, 0.0f);
         double error = 0.0, entropy = 0.0;
         unsigned char found = 0;
@@ -965,6 +1021,7 @@ void Harmony::reassign_block_runs(size_t n_lead_runs) {
             error += cell_error;
             entropy += (weighted_shifted - std::log(double(total)) * weighted) / total;
         }
+        std::copy(sums, sums + K, run_sums.colptr(r));
         run_error[r] = error;
         run_entropy[r] = entropy;
         run_flags[r] = found;
@@ -972,9 +1029,26 @@ void Harmony::reassign_block_runs(size_t n_lead_runs) {
 }
 
 void Harmony::update_R() {
-    std::vector<unsigned> indices_vec(N);
-    std::iota(indices_vec.begin(), indices_vec.end(), 0);
-    std::shuffle(indices_vec.begin(), indices_vec.end(), rng);
+    // With several threads, the next pass's order is shuffled on another
+    // thread during this pass. rng is used only here once clustering starts,
+    // so the shuffles come out in the same order either way.
+    std::vector<unsigned> indices_vec;
+    if (next_order_pending) {
+        next_shuffle.wait();
+        indices_vec.swap(next_order);
+        next_order_pending = false;
+    } else {
+        indices_vec.resize(N);
+        std::iota(indices_vec.begin(), indices_vec.end(), 0);
+        std::shuffle(indices_vec.begin(), indices_vec.end(), rng);
+    }
+    if (n_threads > 1) {
+        next_order.resize(N);
+        next_order_pending = next_shuffle.try_start([this] {
+            std::iota(next_order.begin(), next_order.end(), 0);
+            std::shuffle(next_order.begin(), next_order.end(), rng);
+        });
+    }
 
     unsigned n_blocks = static_cast<unsigned>(std::ceil(1.0 / block_size));
     unsigned cells_per_block = std::max(1u, static_cast<unsigned>(N * block_size));
@@ -1093,13 +1167,14 @@ void Harmony::multi_covariate_totals(const arma::Mat<unsigned char>& kept, MATTY
     z_all.zeros(d, K);
     MATTYPE masked(K, std::min<unsigned>(kCellsPerProduct, N));
     MATTYPE task_sums(K, n_chunks(N));
+    ThreadScratch scratch(pool_threads(), K);
     const unsigned char* kept_mem = kept.memptr();
     for (unsigned j0 = 0; j0 < static_cast<unsigned>(N); j0 += kCellsPerProduct) {
         const unsigned n = std::min<unsigned>(kCellsPerProduct, N - j0);
-        run_tasks(n_chunks(n), size_t(n) * K * n_cov, [&](size_t t) {
+        run_tasks_on_threads(n_chunks(n), size_t(n) * K * n_cov, [&](size_t t, unsigned thread) {
             const unsigned i0 = t * kCellsPerTask;
             const unsigned i1 = std::min(n, i0 + kCellsPerTask);
-            float* sums = task_sums.colptr(j0 / kCellsPerTask + t);
+            float* sums = scratch.get(thread);
             std::fill(sums, sums + K, 0.0f);
             for (unsigned i = i0; i < i1; ++i) {
                 const unsigned j = j0 + i;
@@ -1113,6 +1188,7 @@ void Harmony::multi_covariate_totals(const arma::Mat<unsigned char>& kept, MATTY
                     sums[k] += m[k];
                 }
             }
+            std::copy(sums, sums + K, task_sums.colptr(j0 / kCellsPerTask + t));
         });
         const MATTYPE Z_chunk(const_cast<float*>(Z_orig.colptr(j0)), d, n, false, true);
         if (n == masked.n_cols) {
@@ -1134,10 +1210,11 @@ void Harmony::batch_coordinate_sums(std::vector<MATTYPE>& RZ, const std::vector<
     MATTYPE partials(sum_size, n_ridge_partials);
     for (int b = 0; b < B; ++b)
         if (used[b]) RZ[b].set_size(K, d);
-    run_tasks(ridge_runs.size(), size_t(N) * n_covariates * sum_size, [&](size_t r) {
+    ThreadScratch scratch(pool_threads(), sum_size);
+    run_tasks_on_threads(ridge_runs.size(), size_t(N) * n_covariates * sum_size, [&](size_t r, unsigned thread) {
         const CellRun& run = ridge_runs[r];
         if (!used[run.group]) return;
-        float* acc = ridge_partial[r] < 0 ? RZ[run.group].memptr() : partials.colptr(ridge_partial[r]);
+        float* acc = scratch.get(thread);
         std::fill(acc, acc + sum_size, 0.0f);
         for (unsigned t = run.begin; t < run.end; ++t) {
             const unsigned j = batch_groups.cells[t];
@@ -1149,6 +1226,8 @@ void Harmony::batch_coordinate_sums(std::vector<MATTYPE>& RZ, const std::vector<
                 for (int k = 0; k < K; ++k) row[k] += z_i * r_col[k];
             }
         }
+        float* out = ridge_partial[r] < 0 ? RZ[run.group].memptr() : partials.colptr(ridge_partial[r]);
+        std::copy(acc, acc + sum_size, out);
     });
     std::vector<char> started(B, 0);
     for (size_t r = 0; r < ridge_runs.size(); ++r) {
@@ -1169,11 +1248,13 @@ void Harmony::batch_coordinate_sums(std::vector<MATTYPE>& RZ, const std::vector<
 void Harmony::apply_corrections(const std::vector<MATTYPE>& M) {
     const unsigned n_cov = n_covariates;
     const unsigned d_pad = (static_cast<unsigned>(d) + 15) & ~15u;
-    run_tasks(n_chunks(N), size_t(N) * K * d, [&](size_t t) {
+    const size_t combined_size = static_cast<size_t>(d_pad) * K;
+    ThreadScratch scratch(pool_threads(), combined_size + d_pad);
+    run_tasks_on_threads(n_chunks(N), size_t(N) * K * d, [&](size_t t, unsigned thread) {
         const unsigned i0 = t * kCellsPerTask;
         const unsigned i1 = std::min<unsigned>(N, i0 + kCellsPerTask);
-        std::vector<float> combined(static_cast<size_t>(d_pad) * K);
-        std::vector<float> total(d_pad);
+        float* combined = scratch.get(thread);
+        float* total = combined + combined_size;
         const unsigned* combination = nullptr;
         bool corrected = false;
         for (unsigned i = i0; i < i1; ++i) {
@@ -1182,7 +1263,7 @@ void Harmony::apply_corrections(const std::vector<MATTYPE>& M) {
             if (!combination || !std::equal(batches, batches + n_cov, combination)) {
                 combination = batches;
                 corrected = false;
-                std::fill(combined.begin(), combined.end(), 0.0f);
+                std::fill(combined, combined + combined_size, 0.0f);
                 for (unsigned c = 0; c < n_cov; ++c) {
                     const MATTYPE& m = M[batches[c]];
                     if (m.is_empty()) continue;
@@ -1200,7 +1281,7 @@ void Harmony::apply_corrections(const std::vector<MATTYPE>& M) {
                 std::copy(z, z + d, out);
                 continue;
             }
-            float* __restrict__ sum = total.data();
+            float* __restrict__ sum = total;
             std::fill(sum, sum + d_pad, 0.0f);
             const float* r = R.colptr(j);
             for (int k = 0; k < K; ++k) {
@@ -1385,8 +1466,19 @@ void Harmony::moe_correct_ridge() {
         const MATTYPE C_over_D = C.each_row() / D.t();
         const MATTYPE schur = A - C_over_D * C.t();
         const MATTYPE rhs_reduced = rhs_dense - C_over_D * rhs_diag;
-        const MATTYPE W_dense = n_dense == 1 ? MATTYPE(rhs_reduced / schur(0, 0))
-                                             : MATTYPE(arma::inv(schur) * rhs_reduced);
+        // A system too ill-conditioned for float32 (reciprocal condition
+        // number below machine epsilon) is reported instead of solved.
+        MATTYPE W_dense;
+        bool solved;
+        if (n_dense == 1) {
+            const float pivot = schur(0, 0);
+            solved = std::isfinite(pivot) && std::abs(pivot) > std::numeric_limits<float>::epsilon() * A(0, 0);
+            if (solved) W_dense = rhs_reduced / pivot;
+        } else {
+            solved = arma::solve(W_dense, schur, rhs_reduced, arma::solve_opts::no_approx);
+        }
+        if (!solved)
+            numerical_error("ridge correction", "ridge system is singular; lamb (or alpha) must be positive");
         MATTYPE W_diag = rhs_diag - C.t() * W_dense;
         W_diag.each_col() /= D;
 

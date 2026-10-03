@@ -19,6 +19,8 @@ using namespace harmony;
 using NpDouble2D = nb::ndarray<double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
 using NpDouble1D = nb::ndarray<double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 using NpInt64_2D = nb::ndarray<int64_t, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+// Read-only inputs (e.g. memory-mapped arrays) are accepted where C++ only reads.
+using NpConstDouble2D = nb::ndarray<const double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
 
 // Convert NumPy 2D array (double, row-major) to Armadillo matrix (col-major)
 arma::mat numpy_to_arma_mat(NpDouble2D arr) {
@@ -85,7 +87,7 @@ public:
     std::unique_ptr<Harmony> harmony;
 
     HarmonyWrapper(
-        NpDouble2D Z,              // N x d (cells x PCs)
+        NpConstDouble2D Z,         // N x d (cells x PCs)
         NpInt64_2D batch_of_cell,  // n_cov x N int64 — compact, O(N) memory
         NpDouble1D Pr_b,
         NpDouble1D sigma,
@@ -183,7 +185,7 @@ NB_MODULE(_harmony_cpp, m) {
 
     nb::class_<HarmonyWrapper>(m, "HarmonyCpp")
         .def(nb::init<
-            NpDouble2D,            // Z (N x d)
+            NpConstDouble2D,       // Z (N x d)
             NpInt64_2D,            // batch_of_cell (n_cov x N)
             NpDouble1D,            // Pr_b
             NpDouble1D,            // sigma

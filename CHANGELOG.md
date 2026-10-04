@@ -1,6 +1,95 @@
 # Unreleased
 
+### Performance
+- The C++ backend is 20-50x faster on large datasets: on an Apple M1 Ultra,
+  858k cells corrected for batch take 1.9 s instead of 68 s, and corrected
+  for batch and sample (870 levels) 3.1 s instead of 160 s. Most of the
+  time was spent outside BLAS on a single core:
+  - The ridge correction made two passes over the data per cluster. It now
+    sums the terms of every cluster together, in one pass over the cells per
+    batch variable, corrects each cell once, and solves each cluster's system
+    by eliminating the diagonal
+    block of the covariate with the most kept levels, instead of inverting a
+    matrix with one row per level when correcting for several covariates.
+  - Cluster assignments are updated in one pass per cell (logits, softmax,
+    objective terms and checks), without copying the assignment and distance
+    matrices twice per round.
+  - The k-means start reproduces `arma::kmeans` (the same arithmetic and
+    tie-breaking), split across threads.
+  - The extension was built with `-Os` (nanobind's default), which turned off
+    loop vectorization; it is now built with `-O3`.
+- The work, including the large matrix products and each cluster's ridge
+  system, runs on a pool of threads (no OpenMP). Results are identical for
+  any `ncores`. On one thread, the 858k-cell run takes 18.0 s. On a 6-core
+  Linux laptop (AMD Ryzen 5 5560U), it takes 5.7 s instead of 114 s with the
+  2.0.2 wheel.
+- Peak memory for the 858k-cell run is 1.7 GB instead of 2.7 GB (the whole
+  process, on macOS with default settings).
+
+### Changed
+- harmonypy no longer uses BLAS or LAPACK. Each cluster's ridge system is
+  solved in double precision by a Cholesky factorization, and Armadillo is
+  compiled without BLAS and LAPACK, so the extension links only the system C
+  and C++ runtime libraries. The Linux wheels no longer bundle OpenBLAS and
+  libgfortran: the Python 3.12 aarch64 wheel is 218 kB instead of 5.1 MB for
+  2.0.2 (523 kB installed), and building from source needs only a C++17
+  compiler and the Python headers (CMake and the Armadillo headers are
+  downloaded if they are missing).
+- `ncores` sets the number of threads harmonypy uses, at most the number of
+  CPUs available to the process; the default (0) uses all of them.
+  Previously it set `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS` after the
+  BLAS library had read them, which had no effect, and these variables are
+  no longer set.
+- The objective is accumulated in double precision. The float32 sums were
+  off by about 0.7% on 858k cells, and by much more for inputs with large
+  values, which could flip the convergence check when the objective barely
+  changes; such runs may now stop after a different number of iterations.
+  Otherwise the corrected coordinates agree closely with 2.0.2, though not to
+  float32 rounding: the per-PC correlation is at least 0.99999 over 16
+  configurations of 3.5k-1M cells with 1-3 covariates on macOS, and at least
+  0.99998 against the 2.0.2 wheel on Linux. The per-PC correlation with
+  stored R Harmony outputs is the same to 3 decimals.
+- `Harmony.Z_corr`, `Z_orig`, `Z_cos` and `R` are now C-contiguous arrays.
+- Coordinates with NaN or infinite values raise `ValueError`; before, a NaN
+  could make the k-means start loop forever. A `sigma`, `theta` or `lamb` of
+  the wrong length raises `ValueError`, as does a negative or non-finite `lamb`
+  (other than -1, which like `None` selects the estimate) or, when `lamb` is
+  estimated, a negative or non-finite `alpha`. A singular ridge system raises
+  a `RuntimeError` that says so. `lamb=0` or `alpha=0` makes it singular
+  whenever a cluster corrects every level of a batch variable, which with one
+  batch variable is always the case.
+
 ### Fixed
+- With a small fixed `lamb`, the ridge correction could be far from the
+  exact regression. The intercept is the sum of each variable's batch
+  indicators, so with a small `lamb` the ridge system is nearly singular, and
+  its solution depended on the last digits of sums accumulated in float32.
+  With `lamb=0.001`, the rms error of one correction step was 6-14% of the
+  correction itself with one batch variable (synthetic data, 68k-200k cells;
+  in one case the coordinates became non-finite), and 1.3 to 13 times the
+  correction with two or three (69k-858k cells). The ridge sums are now
+  accumulated in double precision and the system is solved in double
+  precision, so one correction step matches a float64 solution to within
+  2.5e-7 (root mean square), also with the default `lamb`, where 2.0.2 was
+  off by up to 8e-3.
+- `lamb` and `theta` given as NumPy values failed: an array `lamb` with more
+  than one value raised `ValueError` ("The truth value of an array ... is
+  ambiguous"), and a NumPy integer or float32 `lamb` or `theta` raised
+  `TypeError`. They are now accepted like lists and Python numbers. A `theta`
+  of the wrong length raises `ValueError` instead of failing an `assert`, and
+  so do values that are not numbers. A fixed `lamb` vector whose first value
+  was negative silently selected the estimate (the backend's internal signal
+  for it); it now raises `ValueError`.
+- `nclust=1` with the default `sigma` failed with a `TypeError` (an
+  `AttributeError` with `verbose=False`), because a single `sigma` was
+  expanded to one value per cluster only when there were several clusters;
+  an integer `sigma` failed the same way for any `nclust`.
+- Building from source with CMake older than 3.24 (e.g. Ubuntu 22.04's 3.22)
+  failed when Armadillo was not installed, because the header download used
+  a CMake 3.24 option.
+- `Harmony.Z_cos` now returns the corrected coordinates with each cell scaled
+  to unit length, as documented: the cosine-normalized coordinates Harmony
+  clusters on. Since 2.0.0 it returned the same values as `Z_corr`.
 - `batch_prop_cutoff` now compares the fraction of each batch's cells
   soft-assigned to a cluster with the cutoff, as R Harmony does, when
   correcting for more than one covariate. Since 2.0.0, each batch's cell count
@@ -13,6 +102,23 @@
   (1e-5); at 0.01, the minimum per-PC correlation with R improves from 0.923
   to 0.970. See `notebooks/pr56-batch-prop-cutoff/`. Thanks to @jkhales for
   finding and fixing this (#56).
+
+### Development
+- `scripts/compare_outputs.py` runs the same configurations with two builds
+  and compares their results and run times.
+- Wheel builds run all of `tests/test_harmony.py`, not just the pbmc test.
+- Wheels are built with cibuildwheel 4.2, which adds CPython 3.14 wheels;
+  2.0.2 shipped none because cibuildwheel 2.21 predates 3.14.
+- New tests check one ridge step against a direct float64 solve (1-3
+  covariates in either order, estimated and small fixed `lamb`, clusters that
+  drop batches, and a small `lamb` with 30,000-cell clusters), that `lamb=0`
+  raises (also from a worker thread), that results do not depend on `ncores`
+  (with the per-cluster solves on the thread pool), and the input checks.
+- CI and the local Docker test script no longer install OpenBLAS.
+- The local large-dataset run in `tests/test_harmony.py` read the row index
+  in the unnamed first column of `acute_myeloid_pcs.tsv.gz` as a 29th PC.
+  Unnamed columns are now skipped, so it corrects the 28 PCs, as R does; the
+  minimum per-PC correlation with the reference rose from 0.953 to 0.990.
 
 # 2.0.2 - 2026-09-16
 

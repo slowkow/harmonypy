@@ -31,6 +31,55 @@ if not logger.handlers:
     logger.addHandler(ch)
 
 
+def _available_cores():
+    """Number of CPUs this process may run on.
+
+    Respects CPU affinity (e.g. Slurm, taskset) where the platform reports it.
+    """
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
+def _numbers(values, name):
+    """values (a number, sequence, NumPy array or NumPy scalar) as a float32 array.
+
+    An (n, 1) or (1, n) array is read as a sequence of n numbers. Anything that
+    is not real numbers raises ValueError.
+    """
+    try:
+        array = np.asarray(values)
+        if array.dtype.kind == "O":
+            array = array.astype(np.float64)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"{name} must be a number or a sequence of numbers") from err
+    if array.dtype.kind not in "biuf":
+        raise ValueError(f"{name} must be a number or a sequence of numbers, not {array.dtype}")
+    if array.ndim > 1 and array.size == max(array.shape):
+        array = array.reshape(-1)
+    return array.astype(np.float32)
+
+
+def _per_batch(values, phi_n, name, other=None):
+    """Expand a parameter to one float32 value per batch.
+
+    values is one number for all batches, one per batch variable, or one per
+    batch. phi_n holds the number of batches of each variable. other describes
+    any other accepted form, for the error message.
+    """
+    values = _numbers(values, name)
+    if values.ndim == 0:
+        return np.repeat(values, np.sum(phi_n))
+    if values.ndim == 1 and len(values) == len(phi_n):
+        return np.repeat(values, phi_n)
+    if values.ndim == 1 and len(values) == np.sum(phi_n):
+        return values
+    forms = ["one number", f"one per batch variable ({len(phi_n)})", f"one per batch ({np.sum(phi_n)})"]
+    forms += [other] if other else []
+    raise ValueError(f"{name} must be {', '.join(forms[:-1])}, or {forms[-1]}; got shape {values.shape}")
+
+
 def run_harmony(
     data_mat: np.ndarray,
     meta_data,
@@ -63,13 +112,18 @@ def run_harmony(
         supporting ``meta_data[var]`` column access and ``.shape[0]``.
     vars_use : str or list
         Column name(s) in meta_data to use for batch correction
-    theta : float or list, optional
-        Diversity penalty parameter(s). Default is 2 for each batch.
-    lamb : float or list, optional
-        Ridge regression penalty. Default is None (auto-estimation).
-        Set to a positive value for fixed lambda.
-    sigma : float, optional
-        Kernel bandwidth for soft clustering. Default is 0.1.
+    theta : float or array-like, optional
+        Diversity penalty: one number for all batches, one per batch
+        variable (in the order of vars_use), or one per batch (each
+        variable's levels in sorted order). Default is 2.
+    lamb : float or array-like, optional
+        Ridge regression penalty, given like theta, with positive values; one
+        per batch may also be preceded by the intercept's penalty (otherwise
+        0). Default is None, which estimates it in each cluster from alpha;
+        -1 does the same.
+    sigma : float or array-like, optional
+        Kernel bandwidth for soft clustering, one value for all clusters or
+        one per cluster. Default is 0.1.
     nclust : int, optional
         Number of clusters. Default is min(N/30, 100).
     tau : float, optional
@@ -93,8 +147,10 @@ def run_harmony(
     random_state : int, optional
         Random seed for reproducibility. Default is 0.
     ncores : int, optional
-        Number of BLAS threads for matrix operations. Default is 0
-        (use all available cores). Set to 1 for single-threaded execution.
+        Number of threads, at most the number of CPUs this process may use
+        (its CPU affinity, where the platform reports it). Default is 0,
+        which uses all of them; in a container limited by a CPU quota, set
+        it explicitly. Results are the same for any value.
 
     Returns
     -------
@@ -126,7 +182,8 @@ def run_harmony(
     if nclust is None:
         nclust = int(min(round(N / 30.0), 100))
 
-    if isinstance(sigma, float) and nclust > 1:
+    sigma = np.asarray(sigma, dtype=np.float64)
+    if sigma.ndim == 0:
         sigma = np.repeat(sigma, nclust)
 
     if isinstance(vars_use, str):
@@ -145,33 +202,22 @@ def run_harmony(
         offset += n_levels
 
     # Theta handling - default is 2 (matches R package)
-    if theta is None:
-        theta = np.repeat([2] * len(phi_n), phi_n).astype(np.float32)
-    elif isinstance(theta, (float, int)):
-        theta = np.repeat([theta] * len(phi_n), phi_n).astype(np.float32)
-    elif len(theta) == len(phi_n):
-        theta = np.repeat([theta], phi_n).astype(np.float32)
-    else:
-        theta = np.asarray(theta, dtype=np.float32)
+    theta = _per_batch(2.0 if theta is None else theta, phi_n, "theta")
 
-    assert len(theta) == np.sum(phi_n), \
-        "each batch variable must have a theta"
-
-    # Lambda handling (matches R harmony2: NULL = auto-estimation)
-    lambda_estimation = False
-    if lamb is None or lamb == -1:
-        lambda_estimation = True
+    # Lambda handling (matches R harmony2: NULL = auto-estimation). A single
+    # -1, also in a one-element list or array, selects estimation too.
+    lamb = None if lamb is None else _numbers(lamb, "lamb")
+    lambda_estimation = lamb is None or (lamb.size == 1 and lamb.reshape(-1)[0] == -1)
+    if lambda_estimation:
         lamb = np.zeros(1, dtype=np.float32)
-    elif isinstance(lamb, (float, int)):
-        lamb = np.repeat([lamb] * len(phi_n), phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
-    elif len(lamb) == len(phi_n):
-        lamb = np.repeat([lamb], phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
     else:
-        lamb = np.asarray(lamb, dtype=np.float32)
-        if len(lamb) == np.sum(phi_n):
-            lamb = np.insert(lamb, 0, 0).astype(np.float32)
+        # One value per batch, with the intercept's penalty (0) in front, or
+        # that full vector as given.
+        if lamb.ndim != 1 or len(lamb) != np.sum(phi_n) + 1:
+            other = f"the intercept's penalty and then one per batch ({np.sum(phi_n) + 1})"
+            lamb = np.insert(_per_batch(lamb, phi_n, "lamb", other), 0, 0)
+        if not np.all(np.isfinite(lamb)) or np.any(lamb < 0):
+            raise ValueError("lamb must be finite and not negative")
 
     # Number of items in each category
     B = int(np.sum(phi_n))
@@ -193,7 +239,8 @@ def run_harmony(
         if lambda_estimation:
             logger.info(f"    lamb: dynamic (alpha={alpha})")
         else:
-            logger.info(f"    lamb: {lamb[1:]}")
+            intercept = f" (intercept: {lamb[0]})" if lamb[0] else ""
+            logger.info(f"    lamb: {lamb[1:]}{intercept}")
         logger.info(f"    theta: {theta}")
         logger.info(f"    sigma: {sigma[:5]}..." if len(sigma) > 5 else f"    sigma: {sigma}")
         logger.info(f"    verbose: {verbose}")
@@ -201,8 +248,8 @@ def run_harmony(
         logger.info(f"  Data: {data_mat.shape[0]} PCs × {N} cells")
         logger.info(f"  Batch variables: {vars_use}")
 
-    # Prepare arrays for C++ backend
-    data_f64 = np.ascontiguousarray(data_mat.astype(np.float64))
+    # Prepare arrays for C++ backend: one row per cell
+    data_f64 = np.ascontiguousarray(data_mat.T, dtype=np.float64)
     batch_of_cell_c = np.ascontiguousarray(batch_of_cell)
 
     # Signal lambda estimation with sentinel [-1]
@@ -210,12 +257,6 @@ def run_harmony(
         lamb_cpp = np.array([-1.0], dtype=np.float64)
     else:
         lamb_cpp = lamb.astype(np.float64)
-
-    # Set BLAS thread count (Accelerate on macOS, OpenBLAS on Linux).
-    # ncores=0 means use all available cores (don't set env vars).
-    if ncores > 0:
-        os.environ["OMP_NUM_THREADS"] = str(ncores)
-        os.environ["OPENBLAS_NUM_THREADS"] = str(ncores)
 
     cpp_harmony = HarmonyCpp(
         data_f64,
@@ -235,6 +276,7 @@ def run_harmony(
         float(batch_prop_cutoff),
         verbose,
         random_state if random_state is not None else 0,
+        min(int(ncores), _available_cores()) if ncores > 0 else _available_cores(),
         logger.info,
     )
     return Harmony(cpp_harmony)
@@ -269,22 +311,25 @@ class Harmony:
     @property
     def Z_corr(self):
         """Corrected embedding matrix (N x d)."""
-        return self._cpp.Z_corr.T
+        return self._cpp.Z_corr
 
     @property
     def Z_orig(self):
         """Original embedding matrix (N x d)."""
-        return self._cpp.Z_orig.T
+        return self._cpp.Z_orig
 
     @property
     def Z_cos(self):
-        """L2-normalized embedding matrix (N x d)."""
-        return self._cpp.Z_cos.T
+        """Corrected embedding matrix with each cell scaled to unit length (N x d).
+
+        These are the cosine-normalized coordinates that Harmony clusters on.
+        """
+        return self._cpp.Z_cos
 
     @property
     def R(self):
         """Soft cluster assignment matrix (N x K)."""
-        return self._cpp.R.T
+        return self._cpp.R
 
     @property
     def Y(self):
@@ -313,4 +358,4 @@ class Harmony:
 
     def result(self):
         """Return corrected data as NumPy array."""
-        return self._cpp.Z_corr.T
+        return self._cpp.Z_corr

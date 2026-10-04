@@ -30,7 +30,7 @@ test_version() {
         bash -c "
             set -e
             echo '--- Installing system dependencies ---'
-            apt-get update -qq && apt-get install -y -qq build-essential cmake libopenblas-dev > /dev/null 2>&1
+            apt-get update -qq && apt-get install -y -qq build-essential cmake > /dev/null 2>&1
 
             echo '--- Building and installing harmonypy ---'
             pip install --upgrade pip -q

@@ -63,7 +63,7 @@ def main():
     parser.add_argument("--batch-var", default="sample",
                         help="Batch variable name in metadata")
     parser.add_argument("--ncores", type=int, default=1,
-                        help="Number of BLAS threads (Linux only)")
+                        help="Number of threads (0 = every available CPU)")
     args = parser.parse_args()
 
     if not os.path.exists(args.meta):

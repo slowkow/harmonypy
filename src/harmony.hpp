@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
+#include "thread_pool.hpp"
 
 namespace harmony {
 
@@ -22,13 +24,22 @@ typedef arma::Mat<float> MATTYPE;
 typedef arma::Col<float> VECTYPE;
 typedef arma::Row<float> ROWTYPE;
 
-inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
-    VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
-    lambda_vec.subvec(1, lambda_vec.n_elem - 1) = cluster_E * alpha;
-    return lambda_vec;
+// Scale x to unit L2 norm. The squares are summed in double, which cannot
+// overflow or underflow for float inputs; a zero vector is left unchanged.
+inline void scale_to_unit_length(float* x, unsigned n) {
+    double sum = 0.0;
+    for (unsigned i = 0; i < n; ++i) sum += static_cast<double>(x[i]) * x[i];
+    if (sum == 0.0) return;
+    const float norm = static_cast<float>(std::sqrt(sum));
+    for (unsigned i = 0; i < n; ++i) x[i] = x[i] / norm;
 }
 
-MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
+// A copy of X with each column scaled to unit L2 norm.
+inline MATTYPE unit_length_columns(MATTYPE X) {
+    for (arma::uword j = 0; j < X.n_cols; ++j) scale_to_unit_length(X.colptr(j), X.n_rows);
+    return X;
+}
+
 bool objective_converged(float obj_old, float obj_new, float epsilon);
 MATTYPE assignment_logits(
     const MATTYPE& distances,
@@ -40,16 +51,40 @@ MATTYPE assignment_logits(
 );
 ROWTYPE exponentiate_shifted_logits(MATTYPE& logits);
 
+// Positions [begin, end) of a cell list, all from one group (a batch, or a
+// pair of batches). Work is split into these runs, never by thread.
+struct CellRun {
+    unsigned group;
+    unsigned begin;
+    unsigned end;
+};
+
+// Cells grouped by a key: the cells with key g are
+// cells[offsets[g] .. offsets[g + 1]), in increasing order, split into runs.
+struct CellGroups {
+    std::vector<unsigned> cells;
+    std::vector<unsigned> offsets;
+    std::vector<CellRun> runs;
+};
+
+// The cells that share a batch from covariate a and a batch from covariate b.
+struct CovariatePair {
+    std::vector<unsigned> batch_a;   // batch from the first covariate, per pair
+    std::vector<unsigned> batch_b;   // batch from the second covariate, per pair
+    CellGroups groups;               // cells grouped by pair
+};
+
+// One thread's scratch space for the per-cluster ridge systems.
+struct RidgeWorkspace;
+
 class Harmony {
 public:
     MATTYPE Z_orig;
     MATTYPE Z_corr;
 
-    arma::Mat<arma::uword> batch_ids;   // n_cov x N: batch index per covariate
     int n_covariates;
     VECTYPE Pr_b;
     VECTYPE batch_sizes;
-    std::vector<arma::uvec> batch_index;
 
     MATTYPE Y;
     MATTYPE R;
@@ -57,7 +92,6 @@ public:
 
     MATTYPE O;
     MATTYPE E;
-    MATTYPE W;
 
     VECTYPE sigma;
     VECTYPE theta;
@@ -72,6 +106,7 @@ public:
     float block_size;
     int window_size;
     bool verbose;
+    unsigned n_threads;
 
     std::vector<int> B_vec;
     std::vector<unsigned> covariate_bounds;
@@ -107,13 +142,14 @@ public:
         double batch_proportion_cutoff,
         bool verbose,
         int random_state,
+        int ncores = 1,
         std::function<void(const std::string&)> log_fn = nullptr
     );
 
     arma::mat result() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_corr() const { return arma::conv_to<arma::mat>::from(Z_corr); }
     arma::mat get_Z_orig() const { return arma::conv_to<arma::mat>::from(Z_orig); }
-    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(Z_corr); }
+    arma::mat get_Z_cos() const { return arma::conv_to<arma::mat>::from(unit_length_columns(Z_corr)); }
     arma::mat get_R() const { return arma::conv_to<arma::mat>::from(R); }
     arma::mat get_Y() const { return arma::conv_to<arma::mat>::from(Y); }
 
@@ -126,15 +162,75 @@ public:
     void moe_correct_ridge();
 
 private:
+    std::unique_ptr<ThreadPool> pool;
+
+    // batch_groups: the cells of each batch (all covariates).
+    // covariate_pairs: one entry per pair of covariates, in (a, b) order.
+    CellGroups batch_groups;
+    std::vector<CovariatePair> covariate_pairs;
+    // Runs of batch_groups for the ridge sums, and each run's partial sum
+    // (-1 when its batch has a single run).
+    std::vector<CellRun> ridge_runs;
+    std::vector<int> ridge_partial;
+    unsigned n_ridge_partials = 0;
+    // Batch of each cell per covariate, cell-major: cell_batches[j * n_cov + c].
+    std::vector<unsigned> cell_batches;
+    // Covariate of each batch.
+    std::vector<unsigned> batch_covariate;
+    // Cells sorted by their combination of batches.
+    std::vector<unsigned> cells_by_combination;
+
+    // Scratch space for update_R, reused across blocks.
+    std::vector<unsigned> block_cells;
+    std::vector<unsigned> block_batches;
+    std::vector<unsigned> block_counts;
+    std::vector<CellRun> block_runs;
+    MATTYPE run_sums;
+    std::vector<double> run_error;
+    std::vector<double> run_entropy;
+    std::vector<unsigned char> run_flags;
+    MATTYPE log_div;
+
+    // Objective terms and invariant checks from the last update_R.
+    double update_error = 0.0;
+    double update_entropy = 0.0;
+    unsigned char update_flags = 0;
+
+    // The next update order, shuffled in the background. Declared last so
+    // the job is joined before the members it uses are destroyed.
+    std::vector<unsigned> next_order;
+    bool next_order_pending = false;
+    BackgroundJob next_shuffle;
+
     void allocate_buffers();
     void build_batch_structures(const arma::Mat<int64_t>& batch_of_cell);
-    void scatter_add_O(const MATTYPE& Rsub, const arma::Mat<arma::uword>& ids, float sign);
-    VECTYPE prepare_multi_covariate_ridge(
-        MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
-    ) const;
-    void check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const;
-    void normalize_log_assignments(MATTYPE& logits, const char* stage) const;
+    void build_covariate_pairs();
+    template <class F> void run_tasks(size_t n_tasks, size_t work, F&& fn) const;
+    template <class F> void run_tasks_on_threads(size_t n_tasks, size_t work, F&& fn) const;
+    unsigned pool_threads() const { return pool ? pool->size() : 1; }
+    void normalise_columns(MATTYPE& X);
+    void assign_without_diversity(const char* stage);
+    template <class T>
+    void sum_runs(const MATTYPE& X, const std::vector<unsigned>& cells,
+                  const std::vector<CellRun>& runs, size_t first, size_t last, arma::Mat<T>& sums);
+    void rebuild_O_E();
+    size_t group_block(const unsigned* cells, unsigned n_cells);
+    void compute_log_diversity();
+    void reassign_block_runs(size_t n_lead_runs);
+    void record_objective(double kmeans_error, double entropy);
+    MATTYPE kmeans_init(const MATTYPE& X);
+    bool kmeans_lloyd_step(MATTYPE& means, const MATTYPE& X,
+                           std::vector<unsigned>& assignment, CellGroups& members);
+    void batch_coordinate_sums(std::vector<arma::mat>& RZ, const std::vector<char>& used);
+    void apply_corrections(const std::vector<MATTYPE>& M);
+    void multi_covariate_totals(const arma::Mat<unsigned char>& kept, arma::mat& z_all, arma::vec& cov_sum);
+    void solve_ridge_cluster(unsigned k, unsigned diag_covariate, const std::vector<unsigned>& keep,
+                             const std::vector<arma::mat>& RZ, const arma::mat& z_all, const arma::vec& cov_sum,
+                             const std::vector<arma::mat>& pair_sums, RidgeWorkspace& ws,
+                             std::vector<MATTYPE>& M);
     void check_state(const char* stage) const;
+    void check_assignment_update() const;
+    void check_objectives(const char* stage) const;
     [[noreturn]] void numerical_error(const char* stage, const char* invariant) const;
 };
 

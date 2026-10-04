@@ -19,6 +19,8 @@ using namespace harmony;
 using NpDouble2D = nb::ndarray<double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
 using NpDouble1D = nb::ndarray<double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 using NpInt64_2D = nb::ndarray<int64_t, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+// Read-only inputs (e.g. memory-mapped arrays) are accepted where C++ only reads.
+using NpConstDouble2D = nb::ndarray<const double, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
 
 // Convert NumPy 2D array (double, row-major) to Armadillo matrix (col-major)
 arma::mat numpy_to_arma_mat(NpDouble2D arr) {
@@ -65,13 +67,27 @@ nb::ndarray<nb::numpy, double, nb::ndim<2>> arma_mat_to_numpy(const arma::mat& m
     return nb::ndarray<nb::numpy, double, nb::ndim<2>>(data, 2, shape, std::move(owner));
 }
 
+// Return the columns of a float matrix as the rows of a NumPy array (one row
+// per cell). Armadillo stores columns contiguously, so this is a straight
+// float-to-double copy.
+nb::ndarray<nb::numpy, double, nb::ndim<2>> columns_as_rows(const MATTYPE& m) {
+    size_t nrows = m.n_cols, ncols = m.n_rows;
+    double* data = new double[m.n_elem];
+    const float* src = m.memptr();
+    for (size_t i = 0; i < m.n_elem; ++i) data[i] = src[i];
+
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+    size_t shape[2] = { nrows, ncols };
+    return nb::ndarray<nb::numpy, double, nb::ndim<2>>(data, 2, shape, std::move(owner));
+}
+
 // Wrapper class that handles numpy conversion
 class HarmonyWrapper {
 public:
     std::unique_ptr<Harmony> harmony;
 
     HarmonyWrapper(
-        NpDouble2D Z,
+        NpConstDouble2D Z,         // N x d (cells x PCs)
         NpInt64_2D batch_of_cell,  // n_cov x N int64 — compact, O(N) memory
         NpDouble1D Pr_b,
         NpDouble1D sigma,
@@ -88,10 +104,14 @@ public:
         double batch_proportion_cutoff,
         bool verbose,
         int random_state,
+        int ncores,
         std::function<void(const std::string&)> log_fn
     ) {
+        // A row-major N x d array has the memory layout of a column-major
+        // d x N matrix, so Armadillo can read it in place.
+        const arma::mat Z_cols(const_cast<double*>(Z.data()), Z.shape(1), Z.shape(0), false, true);
         harmony = std::make_unique<Harmony>(
-            numpy_to_arma_mat(Z),
+            Z_cols,
             numpy_to_arma_imat(batch_of_cell),
             numpy_to_arma_vec(Pr_b),
             numpy_to_arma_vec(sigma),
@@ -108,15 +128,18 @@ public:
             batch_proportion_cutoff,
             verbose,
             random_state,
+            ncores,
             std::move(log_fn)
         );
     }
 
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> result() const { return arma_mat_to_numpy(harmony->result()); }
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_corr() const { return arma_mat_to_numpy(harmony->get_Z_corr()); }
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_orig() const { return arma_mat_to_numpy(harmony->get_Z_orig()); }
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const { return arma_mat_to_numpy(harmony->get_Z_cos()); }
-    nb::ndarray<nb::numpy, double, nb::ndim<2>> R() const { return arma_mat_to_numpy(harmony->get_R()); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> result() const { return columns_as_rows(harmony->Z_corr); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_corr() const { return columns_as_rows(harmony->Z_corr); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_orig() const { return columns_as_rows(harmony->Z_orig); }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> Z_cos() const {
+        return columns_as_rows(unit_length_columns(harmony->Z_corr));
+    }
+    nb::ndarray<nb::numpy, double, nb::ndim<2>> R() const { return columns_as_rows(harmony->R); }
     nb::ndarray<nb::numpy, double, nb::ndim<2>> Y() const { return arma_mat_to_numpy(harmony->get_Y()); }
     int K() const { return harmony->K; }
     int N() const { return harmony->N; }
@@ -164,7 +187,7 @@ NB_MODULE(_harmony_cpp, m) {
 
     nb::class_<HarmonyWrapper>(m, "HarmonyCpp")
         .def(nb::init<
-            NpDouble2D,            // Z
+            NpConstDouble2D,       // Z (N x d)
             NpInt64_2D,            // batch_of_cell (n_cov x N)
             NpDouble1D,            // Pr_b
             NpDouble1D,            // sigma
@@ -181,6 +204,7 @@ NB_MODULE(_harmony_cpp, m) {
             double,                // batch_proportion_cutoff
             bool,                  // verbose
             int,                   // random_state
+            int,                   // ncores
             std::function<void(const std::string&)>  // log_fn
         >(),
             nb::arg("Z"),
@@ -200,18 +224,19 @@ NB_MODULE(_harmony_cpp, m) {
             nb::arg("batch_proportion_cutoff"),
             nb::arg("verbose"),
             nb::arg("random_state"),
+            nb::arg("ncores"),
             nb::arg("log_fn")
         )
         .def("result", &HarmonyWrapper::result, nb::rv_policy::move,
-             "Get the corrected data matrix")
+             "Get the corrected data matrix (N x d)")
         .def_prop_ro("Z_corr", &HarmonyWrapper::Z_corr, nb::rv_policy::move,
-                      "Corrected data matrix (d x N)")
+                      "Corrected data matrix (N x d)")
         .def_prop_ro("Z_orig", &HarmonyWrapper::Z_orig, nb::rv_policy::move,
-                      "Original data matrix (d x N)")
+                      "Original data matrix (N x d)")
         .def_prop_ro("Z_cos", &HarmonyWrapper::Z_cos, nb::rv_policy::move,
-                      "L2-normalized data matrix (d x N)")
+                      "Corrected data matrix with each cell scaled to unit length (N x d)")
         .def_prop_ro("R", &HarmonyWrapper::R, nb::rv_policy::move,
-                      "Soft cluster assignments (K x N)")
+                      "Soft cluster assignments (N x K)")
         .def_prop_ro("Y", &HarmonyWrapper::Y, nb::rv_policy::move,
                       "Cluster centroids (d x K)")
         .def_prop_ro("K", &HarmonyWrapper::K, "Number of clusters")

@@ -61,7 +61,7 @@ CMAKE_BUILD_TYPE = "Release"
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* *-win32 *-manylinux_i686"
 test-requires = ["pytest"]
-test-command = "mkdir -p /tmp/hptest/data && cp -r {project}/tests /tmp/hptest/ && cp {project}/data/pbmc_3500_*.tsv.gz /tmp/hptest/data/ && cd /tmp/hptest && pytest tests/test_harmony.py::test_run_harmony_small -v"
+test-command = "mkdir -p /tmp/hptest/data && cp -r {project}/tests /tmp/hptest/ && cp {project}/data/pbmc_3500_*.tsv.gz /tmp/hptest/data/ && cd /tmp/hptest && pytest tests/test_harmony.py -v"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
@@ -72,7 +72,6 @@ archs = ["x86_64", "aarch64"]
 # enough compiler and prebuilt NumPy wheels.
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
-before-all = "yum install -y epel-release && yum install -y openblas-devel lapack-devel || apk add openblas-dev lapack-dev"
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]

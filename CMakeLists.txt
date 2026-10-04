@@ -35,10 +35,16 @@ if(ARMADILLO_FOUND)
 else()
     message(STATUS "System Armadillo not found, fetching headers...")
     include(FetchContent)
+    # DOWNLOAD_EXTRACT_TIMESTAMP exists from CMake 3.24; older versions would
+    # read it as part of the URL list and fail.
+    set(ARMADILLO_FETCH_OPTIONS)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        set(ARMADILLO_FETCH_OPTIONS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
     FetchContent_Declare(
         armadillo
         URL https://sourceforge.net/projects/arma/files/armadillo-14.2.2.tar.xz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        ${ARMADILLO_FETCH_OPTIONS}
     )
     # Use FetchContent_Populate (not MakeAvailable) to get headers only,
     # without adding Armadillo's install targets to the wheel.
@@ -46,39 +52,27 @@ else()
     set(ARMADILLO_INCLUDE ${armadillo_SOURCE_DIR}/include)
 endif()
 
-# Create the Python module
+# Create the Python module. NOMINSIZE keeps -O3: by default nanobind adds -Os,
+# which turns off loop vectorization in the numerical code.
 nanobind_add_module(_harmony_cpp
     NB_STATIC
+    NOMINSIZE
     src/harmony.cpp
     src/bindings.cpp
 )
 
-# Armadillo in header-only mode: call BLAS/LAPACK directly
-target_compile_definitions(_harmony_cpp PRIVATE ARMA_DONT_USE_WRAPPER)
+# Armadillo in header-only mode, without BLAS or LAPACK: the matrix products
+# and the small linear systems are computed in src/harmony.cpp, so nothing
+# needs to be linked.
+target_compile_definitions(_harmony_cpp PRIVATE ARMA_DONT_USE_WRAPPER ARMA_DONT_USE_BLAS ARMA_DONT_USE_LAPACK)
 target_include_directories(_harmony_cpp PRIVATE
     ${ARMADILLO_INCLUDE}
     ${CMAKE_SOURCE_DIR}/src
 )
 
-# Link BLAS/LAPACK
-if(APPLE)
-    target_link_libraries(_harmony_cpp PRIVATE "-framework Accelerate")
-else()
-    # Find OpenBLAS (provides both BLAS and LAPACK)
-    find_library(OPENBLAS_LIB openblas
-        PATHS /usr/lib64 /usr/lib /usr/local/lib
-              /usr/lib/x86_64-linux-gnu
-              /usr/lib/aarch64-linux-gnu)
-    if(OPENBLAS_LIB)
-        message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")
-        target_link_libraries(_harmony_cpp PRIVATE ${OPENBLAS_LIB})
-    else()
-        # Fallback: try generic BLAS/LAPACK
-        find_package(BLAS REQUIRED)
-        find_package(LAPACK REQUIRED)
-        target_link_libraries(_harmony_cpp PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
-    endif()
-endif()
+# std::thread needs pthreads on Linux
+find_package(Threads REQUIRED)
+target_link_libraries(_harmony_cpp PRIVATE Threads::Threads)
 
 # Install target
 install(TARGETS _harmony_cpp LIBRARY DESTINATION harmonypy)

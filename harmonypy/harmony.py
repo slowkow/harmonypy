@@ -42,6 +42,44 @@ def _available_cores():
         return os.cpu_count() or 1
 
 
+def _numbers(values, name):
+    """values (a number, sequence, NumPy array or NumPy scalar) as a float32 array.
+
+    An (n, 1) or (1, n) array is read as a sequence of n numbers. Anything that
+    is not real numbers raises ValueError.
+    """
+    try:
+        array = np.asarray(values)
+        if array.dtype.kind == "O":
+            array = array.astype(np.float64)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"{name} must be a number or a sequence of numbers") from err
+    if array.dtype.kind not in "biuf":
+        raise ValueError(f"{name} must be a number or a sequence of numbers, not {array.dtype}")
+    if array.ndim > 1 and array.size == max(array.shape):
+        array = array.reshape(-1)
+    return array.astype(np.float32)
+
+
+def _per_batch(values, phi_n, name, other=None):
+    """Expand a parameter to one float32 value per batch.
+
+    values is one number for all batches, one per batch variable, or one per
+    batch. phi_n holds the number of batches of each variable. other describes
+    any other accepted form, for the error message.
+    """
+    values = _numbers(values, name)
+    if values.ndim == 0:
+        return np.repeat(values, np.sum(phi_n))
+    if values.ndim == 1 and len(values) == len(phi_n):
+        return np.repeat(values, phi_n)
+    if values.ndim == 1 and len(values) == np.sum(phi_n):
+        return values
+    forms = ["one number", f"one per batch variable ({len(phi_n)})", f"one per batch ({np.sum(phi_n)})"]
+    forms += [other] if other else []
+    raise ValueError(f"{name} must be {', '.join(forms[:-1])}, or {forms[-1]}; got shape {values.shape}")
+
+
 def run_harmony(
     data_mat: np.ndarray,
     meta_data,
@@ -74,11 +112,15 @@ def run_harmony(
         supporting ``meta_data[var]`` column access and ``.shape[0]``.
     vars_use : str or list
         Column name(s) in meta_data to use for batch correction
-    theta : float or list, optional
-        Diversity penalty parameter(s). Default is 2 for each batch.
-    lamb : float or list, optional
-        Ridge regression penalty. Default is None (auto-estimation).
-        Set to a positive value for fixed lambda.
+    theta : float or array-like, optional
+        Diversity penalty: one number for all batches, one per batch
+        variable (in the order of vars_use), or one per batch (each
+        variable's levels in sorted order). Default is 2.
+    lamb : float or array-like, optional
+        Ridge regression penalty, given like theta, with positive values; one
+        per batch may also be preceded by the intercept's penalty (otherwise
+        0). Default is None, which estimates it in each cluster from alpha;
+        -1 does the same.
     sigma : float or array-like, optional
         Kernel bandwidth for soft clustering, one value for all clusters or
         one per cluster. Default is 0.1.
@@ -160,33 +202,22 @@ def run_harmony(
         offset += n_levels
 
     # Theta handling - default is 2 (matches R package)
-    if theta is None:
-        theta = np.repeat([2] * len(phi_n), phi_n).astype(np.float32)
-    elif isinstance(theta, (float, int)):
-        theta = np.repeat([theta] * len(phi_n), phi_n).astype(np.float32)
-    elif len(theta) == len(phi_n):
-        theta = np.repeat([theta], phi_n).astype(np.float32)
-    else:
-        theta = np.asarray(theta, dtype=np.float32)
+    theta = _per_batch(2.0 if theta is None else theta, phi_n, "theta")
 
-    assert len(theta) == np.sum(phi_n), \
-        "each batch variable must have a theta"
-
-    # Lambda handling (matches R harmony2: NULL = auto-estimation)
-    lambda_estimation = False
-    if lamb is None or lamb == -1:
-        lambda_estimation = True
+    # Lambda handling (matches R harmony2: NULL = auto-estimation). A single
+    # -1, also in a one-element list or array, selects estimation too.
+    lamb = None if lamb is None else _numbers(lamb, "lamb")
+    lambda_estimation = lamb is None or (lamb.size == 1 and lamb.reshape(-1)[0] == -1)
+    if lambda_estimation:
         lamb = np.zeros(1, dtype=np.float32)
-    elif isinstance(lamb, (float, int)):
-        lamb = np.repeat([lamb] * len(phi_n), phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
-    elif len(lamb) == len(phi_n):
-        lamb = np.repeat([lamb], phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
     else:
-        lamb = np.asarray(lamb, dtype=np.float32)
-        if len(lamb) == np.sum(phi_n):
-            lamb = np.insert(lamb, 0, 0).astype(np.float32)
+        # One value per batch, with the intercept's penalty (0) in front, or
+        # that full vector as given.
+        if lamb.ndim != 1 or len(lamb) != np.sum(phi_n) + 1:
+            other = f"the intercept's penalty and then one per batch ({np.sum(phi_n) + 1})"
+            lamb = np.insert(_per_batch(lamb, phi_n, "lamb", other), 0, 0)
+        if not np.all(np.isfinite(lamb)) or np.any(lamb < 0):
+            raise ValueError("lamb must be finite and not negative")
 
     # Number of items in each category
     B = int(np.sum(phi_n))
@@ -208,7 +239,8 @@ def run_harmony(
         if lambda_estimation:
             logger.info(f"    lamb: dynamic (alpha={alpha})")
         else:
-            logger.info(f"    lamb: {lamb[1:]}")
+            intercept = f" (intercept: {lamb[0]})" if lamb[0] else ""
+            logger.info(f"    lamb: {lamb[1:]}{intercept}")
         logger.info(f"    theta: {theta}")
         logger.info(f"    sigma: {sigma[:5]}..." if len(sigma) > 5 else f"    sigma: {sigma}")
         logger.info(f"    verbose: {verbose}")

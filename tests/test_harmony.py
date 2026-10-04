@@ -330,7 +330,9 @@ def test_zero_lamb_raises(variables, n_cells, n_dims):
         hm.run_harmony(coordinates, metadata, variables, lamb=0, ncores=4, verbose=False)
 
 
-@pytest.mark.parametrize("penalty", [{"lamb": -0.5}, {"lamb": np.nan}, {"alpha": -0.2}])
+@pytest.mark.parametrize(
+    "penalty", [{"lamb": -0.5}, {"lamb": np.nan}, {"lamb": np.array([-1.0, 1.0, 1.0])}, {"alpha": -0.2}]
+)
 def test_negative_penalty_raises(penalty):
     """A negative or non-finite lamb or alpha is rejected before running."""
     rng = np.random.default_rng(8)
@@ -380,6 +382,84 @@ def test_scalar_sigma(settings):
 
     assert result.R.shape == (300, settings["nclust"])
     assert np.isfinite(result.Z_corr).all()
+
+
+def _lab_and_day_data():
+    rng = np.random.default_rng(10)
+    coordinates = rng.normal(size=(300, 5))
+    metadata = {
+        "lab": rng.choice(["a", "b", "c"], 300),
+        "day": rng.choice(["Monday", "Tuesday"], 300),
+    }
+    coordinates[metadata["lab"] == "a"] += 1.0
+    return coordinates, metadata
+
+
+@pytest.mark.parametrize(
+    "name, forms",
+    [
+        # One number for every batch, as Python and NumPy values.
+        ("lamb", [1.0, 1, np.float32(1.0), np.int64(1), np.array(1.0)]),
+        # One per variable (lab, day), one per batch (3 labs, 2 days), and one
+        # per batch after the intercept's penalty.
+        ("lamb", [[1.0, 2.0], (1, 2), np.array([1.0, 2.0]), np.array([[1.0, 2.0]]),
+                  [1, 1, 1, 2, 2], np.array([1, 1, 1, 2, 2]), np.array([0, 1, 1, 1, 2, 2.0])]),
+        # Estimated lambda.
+        ("lamb", [None, -1, -1.0, np.float32(-1.0), np.int64(-1), np.array(-1), [-1], (-1,), np.array([-1])]),
+        ("theta", [None, 2.0, 2, np.float32(2.0), np.int64(2)]),
+        ("theta", [[2.0, 1.0], np.array([2.0, 1.0]), np.array([[2.0], [1.0]]), [2, 2, 2, 1, 1],
+                   np.array([2, 2, 2, 1, 1.0])]),
+    ],
+)
+def test_parameter_forms_give_the_same_result(name, forms):
+    """lamb and theta accept a number, one value per variable or one per batch,
+    as Python or NumPy values, and equivalent forms give the same result."""
+    coordinates, metadata = _lab_and_day_data()
+
+    results = [
+        hm.run_harmony(coordinates, metadata, ["lab", "day"], nclust=5, verbose=False, **{name: form})
+        for form in forms
+    ]
+
+    for result in results[1:]:
+        np.testing.assert_array_equal(result.Z_corr, results[0].Z_corr)
+
+
+def test_parameter_values_change_the_result():
+    """Different values of lamb and theta give different results, so none is ignored."""
+    coordinates, metadata = _lab_and_day_data()
+
+    def corrected(**settings):
+        return hm.run_harmony(coordinates, metadata, ["lab", "day"], nclust=5, verbose=False, **settings).Z_corr
+
+    lamb_results = [corrected(lamb=lamb) for lamb in (None, 1.0, [1.0, 2.0])]
+    for i in range(3):
+        for j in range(i + 1, 3):
+            assert not np.array_equal(lamb_results[i], lamb_results[j])
+    assert not np.array_equal(corrected(theta=2.0), corrected(theta=[2.0, 1.0]))
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("theta", [1.0, 2.0, 3.0]),
+        ("theta", np.ones((2, 2))),
+        ("lamb", [1.0, 2.0, 3.0]),
+        ("lamb", np.ones(4)),
+        ("theta", "2"),
+        ("theta", [1.0, [2.0, 3.0]]),
+        ("lamb", {"lab": 1.0, "day": 2.0}),
+        ("lamb", [1.0, None]),
+        ("lamb", 1 + 2j),
+    ],
+)
+def test_invalid_parameter_raises(name, value):
+    """A lamb or theta that is not numbers, or not one number, one per variable
+    or one per batch, is rejected."""
+    coordinates, metadata = _lab_and_day_data()
+
+    with pytest.raises(ValueError, match=name):
+        hm.run_harmony(coordinates, metadata, ["lab", "day"], nclust=5, verbose=False, **{name: value})
 
 
 def test_more_threads_than_cpus():

@@ -31,8 +31,8 @@
   solved in double precision by a Cholesky factorization, and Armadillo is
   compiled without BLAS and LAPACK, so the extension links only the system C
   and C++ runtime libraries. The Linux wheels no longer bundle OpenBLAS and
-  libgfortran: the Python 3.12 aarch64 wheel is 217 kB instead of 5.1 MB for
-  2.0.2 (522 kB installed), and building from source needs only a C++17
+  libgfortran: the Python 3.12 aarch64 wheel is 218 kB instead of 5.1 MB for
+  2.0.2 (523 kB installed), and building from source needs only a C++17
   compiler and the Python headers (CMake and the Armadillo headers are
   downloaded if they are missing).
 - `ncores` sets the number of threads harmonypy uses, at most the number of
@@ -51,8 +51,8 @@
   stored R Harmony outputs is the same to 3 decimals.
 - `Harmony.Z_corr`, `Z_orig`, `Z_cos` and `R` are now C-contiguous arrays.
 - Coordinates with NaN or infinite values raise `ValueError`; before, a NaN
-  could make the k-means start loop forever. A `sigma` or `lamb` of the
-  wrong length raises `ValueError`, as does a negative or non-finite `lamb`
+  could make the k-means start loop forever. A `sigma`, `theta` or `lamb` of
+  the wrong length raises `ValueError`, as does a negative or non-finite `lamb`
   (other than -1, which like `None` selects the estimate) or, when `lamb` is
   estimated, a negative or non-finite `alpha`. A singular ridge system raises
   a `RuntimeError` that says so. `lamb=0` or `alpha=0` makes it singular
@@ -72,6 +72,14 @@
   precision, so one correction step matches a float64 solution to within
   2.5e-7 (root mean square), also with the default `lamb`, where 2.0.2 was
   off by up to 8e-3.
+- `lamb` and `theta` given as NumPy values failed: an array `lamb` with more
+  than one value raised `ValueError` ("The truth value of an array ... is
+  ambiguous"), and a NumPy integer or float32 `lamb` or `theta` raised
+  `TypeError`. They are now accepted like lists and Python numbers. A `theta`
+  of the wrong length raises `ValueError` instead of failing an `assert`, and
+  so do values that are not numbers. A fixed `lamb` vector whose first value
+  was negative silently selected the estimate (the backend's internal signal
+  for it); it now raises `ValueError`.
 - `nclust=1` with the default `sigma` failed with a `TypeError` (an
   `AttributeError` with `verbose=False`), because a single `sigma` was
   expanded to one value per cluster only when there were several clusters;

@@ -132,6 +132,14 @@ Ryzen 5 5560U), compared with the 2.0.2 wheel:
 
 `scripts/compare_outputs.py` compares the results and run times of two builds.
 
+On Tahoe-100M (95.6 million cells, 1,344 samples, 50 PCs), this version
+corrects all cells in 4.9 minutes on a 64-core server, where 2.0.2 took 4.5
+hours; with the same number of iterations, it is 16-28x faster on 1-16
+million cells and uses 26-28% less memory. See
+[notebooks/tahoe-100m-benchmark/](notebooks/tahoe-100m-benchmark/).
+
+![Run time and memory of harmonypy on Tahoe-100M](notebooks/tahoe-100m-benchmark/benchmark-2026-10.png)
+
 
 ## Citation
 

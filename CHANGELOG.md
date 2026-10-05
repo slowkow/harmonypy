@@ -25,6 +25,10 @@
   2.0.2 wheel.
 - Peak memory for the 858k-cell run is 1.7 GB instead of 2.7 GB (the whole
   process, on macOS with default settings).
+- On Tahoe-100M (95.6 million cells, 1,344 samples), all cells take 4.9 min
+  on a 64-core server instead of 4.5 h with 2.0.2 (which ran 3 Harmony
+  iterations to this version's 1), with a peak of 214 GB instead of 294 GB.
+  See `notebooks/tahoe-100m-benchmark/`.
 - String and other non-numeric batch labels are numbered in one pass
   through a hash table, as `pandas.factorize` does, instead of by sorting
   every label with `np.unique`. Only the distinct labels are sorted, and

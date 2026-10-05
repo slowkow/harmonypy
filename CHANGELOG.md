@@ -1,4 +1,4 @@
-# Unreleased
+# 2.1.0 - 2026-10-05
 
 ### Performance
 - The C++ backend is 20-50x faster on large datasets: on an Apple M1 Ultra,

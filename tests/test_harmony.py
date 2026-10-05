@@ -473,6 +473,226 @@ def test_more_threads_than_cpus():
     assert np.isfinite(result.Z_corr).all()
 
 
+def test_physical_cores():
+    from harmonypy.harmony import _available_cores, _physical_cores
+
+    cores = _physical_cores()
+    if sys.platform == "darwin" or os.path.exists("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list"):
+        assert cores is not None
+    assert cores is None or 1 <= cores
+
+
+@pytest.mark.parametrize(
+    "cpus, expected",
+    [({0, 1, 2, 3}, 2), ({0, 2}, 1), ({1, 2}, 2), ({0, 1, 2, 3, 4}, None)],
+)
+def test_physical_cores_from_linux_topology(monkeypatch, cpus, expected):
+    """Hardware threads of one core count once, and only the cores of the
+    CPUs in the affinity mask count; an unreadable topology gives None."""
+    import io
+    import harmonypy.harmony as hh
+
+    siblings = {0: "0,2", 1: "1,3", 2: "0,2", 3: "1,3"}  # 2 cores, 2 threads each
+
+    def fake_open(path, *args, **kwargs):
+        cpu = int(path.split("/cpu/cpu")[1].split("/")[0])
+        if cpu not in siblings:
+            raise FileNotFoundError(path)
+        return io.StringIO(siblings[cpu] + "\n")
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: cpus, raising=False)
+    monkeypatch.setattr(hh, "open", fake_open, raising=False)
+    assert hh._physical_cores() == expected
+
+
+@pytest.mark.parametrize(
+    "physical, ncores, expected",
+    [(4, 0, 4), (None, 0, 8), (16, 0, 8), (4, 2, 2), (4, 100, 8)],
+)
+def test_default_threads(monkeypatch, physical, ncores, expected):
+    """By default, one thread per physical core, or per CPU when the cores are
+    unknown; never more threads than CPUs."""
+    import harmonypy.harmony as hh
+
+    class Started(Exception):
+        pass
+
+    def harmony_cpp(*args):
+        raise Started(args[17])  # ncores
+
+    coordinates, metadata = _lab_and_day_data()
+    monkeypatch.setattr(hh, "HarmonyCpp", harmony_cpp)
+    monkeypatch.setattr(hh, "_available_cores", lambda: 8)
+    monkeypatch.setattr(hh, "_physical_cores", lambda: physical)
+    with pytest.raises(Started) as started:
+        hh.run_harmony(coordinates, metadata, "lab", nclust=5, ncores=ncores, verbose=False)
+    assert started.value.args[0] == expected
+
+
+def _label_cases():
+    rng = np.random.default_rng(8)
+    words = rng.choice(["b", "a", "c10", "c9", "é", "", "B"], 500)
+    numbers = rng.choice([3, -1, 10, 2], 500)
+    cases = {
+        "str array": words,
+        "str list": words.tolist(),
+        "object array": words.astype(object),
+        "bytes array": np.char.encode(words, "utf-8"),
+        "integer array": numbers,
+        "float array": numbers / 2,
+        "bool array": numbers > 2,
+        "mixed number objects": np.array([1, 2.0, True, 3, 1.0, 2] * 50, dtype=object),
+        "equal numbers that hash differently": np.array([np.float32(0.1), 0.1, 0.5, 0.1], dtype=object),
+        "unhashable objects": np.array([None, [0], [1], [0]], dtype=object)[1:],
+        "empty": np.array([], dtype=object),
+    }
+    try:
+        import pandas as pd
+    except ImportError:
+        return cases
+    order = ["c10", "z", "a", "b", "é", "", "c9", "B"]  # unsorted, and "z" is unused
+    cases.update({
+        "pandas object Series": pd.Series(words, dtype=object),
+        "pandas str Series": pd.Series(words).astype("str"),
+        "pandas categorical Series": pd.Series(pd.Categorical(words, categories=order)),
+        "pandas ordered Categorical": pd.Categorical(words, categories=order, ordered=True),
+        "pandas integer Categorical": pd.Categorical(numbers, categories=[10, 3, 99, 2, -1]),
+        "pandas MultiIndex": pd.MultiIndex.from_tuples([("a", 1), ("b", 0), ("a", 1)]),
+    })
+    return cases
+
+
+@pytest.mark.parametrize("name", _label_cases())
+def test_factorize_matches_np_unique(name):
+    """Labels are numbered as np.unique(labels, return_inverse=True) numbers them."""
+    from harmonypy.harmony import _factorize
+
+    labels = _label_cases()[name]
+    codes, n = _factorize(labels)
+    uniques, expected = np.unique(np.asarray(labels), return_inverse=True)
+
+    np.testing.assert_array_equal(codes, expected.reshape(-1))
+    assert n == len(uniques)
+
+
+@pytest.mark.parametrize("dtype", [str, object])
+def test_factorize_sorts_only_distinct_strings(monkeypatch, dtype):
+    """String labels are hashed, not sorted with np.unique (slow for millions)."""
+    from harmonypy.harmony import _factorize
+
+    labels = np.array(["b", "a", "c", "a"], dtype=dtype)
+    monkeypatch.setattr(np, "unique", lambda *args, **kwargs: pytest.fail("sorted every label"))
+
+    codes, n = _factorize(labels)
+
+    np.testing.assert_array_equal(codes, [1, 0, 2, 0])
+    assert n == 3
+
+
+def test_factorize_renumbers_categorical_codes():
+    """A categorical's codes are renumbered without reading its labels."""
+    from harmonypy.harmony import _factorize
+
+    class Categorical:  # codes and categories, as a pandas Categorical holds them
+        codes = np.array([2, 0, 3, 0, 2, 3])
+        categories = np.array(["c", "z", "a", "b"])  # unsorted, and "z" is unused
+
+        def __array__(self, dtype=None, copy=None):
+            raise AssertionError("read the labels")
+
+    codes, n = _factorize(Categorical())
+
+    np.testing.assert_array_equal(codes, [0, 2, 1, 2, 0, 1])
+    assert n == 3
+
+
+def test_factorize_reads_codes_of_pandas_categoricals(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    from harmonypy.harmony import _factorize
+
+    labels = pd.Series(pd.Categorical(["b", "a", "b", "c"], categories=["c", "z", "b", "a"]))
+    monkeypatch.setattr(pd.Categorical, "__array__", lambda *args, **kwargs: pytest.fail("read the labels"))
+
+    codes, n = _factorize(labels)
+
+    np.testing.assert_array_equal(codes, [1, 0, 1, 2])
+    assert n == 3
+
+
+def test_factorize_unorderable_labels_raise():
+    """Labels that cannot be sorted raise TypeError, as with np.unique."""
+    from harmonypy.harmony import _factorize
+
+    with pytest.raises(TypeError):
+        _factorize(np.array(["a", 1, "b"], dtype=object))
+
+
+def _missing_label_cases():
+    cases = {
+        "None among strings": np.array(["a", None, "b"], dtype=object),
+        "NaN among strings": np.array(["a", np.nan, "b"], dtype=object),
+        "NaN among numbers": np.array([2.0, np.nan, 1.0], dtype=object),
+        "only NaN": np.array([np.nan, np.nan], dtype=object),
+        "float array with NaN": np.array([2.0, np.nan, 1.0]),
+        "datetime array with NaT": np.array(["2020-01-01", "NaT"], dtype="datetime64[D]"),
+        "categorical with a missing code": _Codes(np.array([0, -1, 1]), np.array(["b", "a"])),
+    }
+    try:
+        import pandas as pd
+    except ImportError:
+        return cases
+    cases.update({
+        "pandas categorical": pd.Series(pd.Categorical(["a", None, "b"])),
+        "pandas str with NaN": pd.Series(["a", None, "b"], dtype="str"),
+        "pandas string with NA": pd.Series(["a", None, "b"], dtype="string"),
+        "pandas nullable integers": pd.Series([1, None, 2], dtype="Int64"),
+        "pandas dates with NaT": pd.Series(pd.to_datetime(["2020-01-02", None]).tz_localize("UTC")),
+    })
+    return cases
+
+
+class _Codes:
+    """Codes and categories, as a pandas Categorical holds them."""
+
+    def __init__(self, codes, categories):
+        self.codes, self.categories = codes, categories
+
+    def __array__(self, dtype=None, copy=None):
+        return np.array([self.categories[c] if c >= 0 else np.nan for c in self.codes], dtype=object)
+
+
+@pytest.mark.parametrize("name", _missing_label_cases())
+def test_missing_labels_raise(name):
+    """Missing labels raise an error that names the column."""
+    from harmonypy.harmony import _factorize
+
+    with pytest.raises(ValueError, match=r"meta_data\['lab'\] has missing labels"):
+        _factorize(_missing_label_cases()[name], "meta_data['lab']")
+
+
+def test_run_harmony_names_the_column_with_missing_labels():
+    coordinates, metadata = _lab_and_day_data()
+    metadata["day"] = metadata["day"].astype(object)
+    metadata["day"][3] = None
+
+    with pytest.raises(ValueError, match=r"meta_data\['day'\] has missing labels"):
+        hm.run_harmony(coordinates, metadata, ["lab", "day"], nclust=5, verbose=False)
+
+
+def test_categorical_labels_give_the_same_result():
+    pd = pytest.importorskip("pandas")
+    coordinates, metadata = _lab_and_day_data()
+    categorical = {
+        name: pd.Categorical(values, categories=sorted(set(values), reverse=True) + ["unused"])
+        for name, values in metadata.items()
+    }
+
+    plain = hm.run_harmony(coordinates, metadata, ["lab", "day"], nclust=5, verbose=False)
+    result = hm.run_harmony(coordinates, categorical, ["lab", "day"], nclust=5, verbose=False)
+
+    np.testing.assert_array_equal(result.Z_corr, plain.Z_corr)
+
+
 def test_z_cos_is_unit_length_z_corr():
     """Z_cos is the corrected embedding with each cell scaled to unit length."""
     rng = np.random.default_rng(6)

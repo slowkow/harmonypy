@@ -18,6 +18,7 @@
 import numpy as np
 from typing import Iterable
 from harmonypy._harmony_cpp import compute_lisi_cpp
+from harmonypy.harmony import _factorize
 
 
 def compute_lisi(
@@ -51,8 +52,6 @@ def compute_lisi(
     X_arr = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
     lisi_df = np.zeros((n_cells, n_labels))
     for i, label in enumerate(label_colnames):
-        col = np.asarray(metadata[label])
-        uniques, codes = np.unique(col, return_inverse=True)
-        n_categories = len(uniques)
+        codes, n_categories = _factorize(metadata[label], f"metadata[{label!r}]")
         lisi_df[:, i] = compute_lisi_cpp(X_arr, codes.astype(np.int32), n_categories, perplexity)
     return lisi_df

@@ -17,8 +17,12 @@
 
 import numpy as np
 from harmonypy._harmony_cpp import HarmonyCpp
+from collections import defaultdict
+import itertools
 import logging
+import operator
 import os
+import sys
 
 # create logger
 logger = logging.getLogger('harmonypy')
@@ -40,6 +44,97 @@ def _available_cores():
         return len(os.sched_getaffinity(0))
     except AttributeError:
         return os.cpu_count() or 1
+
+
+def _physical_cores():
+    """Number of physical cores this process may run on, or None if unknown.
+
+    The hardware threads of one core (hyperthreads) count once. On Linux,
+    these are the cores of the CPUs in the process's affinity mask (e.g.
+    Slurm, taskset); on macOS, all cores.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        cores = set()
+        try:
+            for cpu in os.sched_getaffinity(0):
+                with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list", encoding="ascii") as f:
+                    cores.add(f.read().strip())
+        except OSError:
+            return None
+        return len(cores) or None
+    if sys.platform == "darwin":
+        import ctypes
+        n, size = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+        status = ctypes.CDLL(None).sysctlbyname(
+            b"hw.physicalcpu", ctypes.byref(n), ctypes.byref(size), None, ctypes.c_size_t(0)
+        )
+        return n.value if status == 0 and n.value > 0 else None
+    return None
+
+
+def _missing(label):
+    """Whether label is None, NaN, NaT or pandas.NA."""
+    try:
+        return label is None or bool(label != label)
+    except TypeError:  # pandas.NA cannot be converted to bool
+        return True
+
+
+def _factorize(labels, name="labels"):
+    """Number the distinct labels in sorted order.
+
+    Returns (codes, n): codes[i] is the rank of labels[i] among the n distinct
+    labels, as np.unique(labels, return_inverse=True) gives. np.unique sorts
+    every label, which is slow for strings (7-23 s for 16 million), so labels
+    other than numbers are numbered in one pass through a hash table, and then
+    only the n distinct labels are sorted, as pandas.factorize(sort=True)
+    does. A pandas Categorical's codes are renumbered without reading the
+    labels. Missing labels (None, NaN, NaT or pandas.NA) raise ValueError,
+    naming the labels as name.
+    """
+    missing = ValueError(f"{name} has missing labels (None, NaN or NaT); label those cells or remove them")
+    categorical = getattr(labels, "cat", labels)  # a pandas Series's categorical values
+    codes, categories = getattr(categorical, "codes", None), getattr(categorical, "categories", None)
+    if codes is not None and categories is not None:
+        codes = np.asarray(codes)
+        if codes.size and codes.min() < 0:
+            raise missing
+        if codes.size:
+            used = np.flatnonzero(np.bincount(codes, minlength=len(categories)))
+            uniques, inverse = np.unique(np.asarray(categories)[used], return_inverse=True)
+            rank = np.empty(len(categories), dtype=np.intp)
+            rank[used] = inverse.reshape(-1)
+            return rank[codes], len(uniques)
+    labels = np.asarray(labels).reshape(-1)
+    kind = labels.dtype.kind
+    if (kind in "fc" and np.isnan(labels).any()) or (kind in "mM" and np.isnat(labels).any()):
+        raise missing
+    if kind not in "biufcmM":  # np.unique is fast for numbers
+        try:
+            # Number the labels in the order they first appear (in C: dict
+            # lookups through map).
+            first_seen = defaultdict(itertools.count().__next__)
+            codes = np.fromiter(map(first_seen.__getitem__, labels.tolist()), dtype=np.intp, count=labels.size)
+            distinct = list(first_seen)
+        except TypeError:  # labels that cannot be hashed
+            distinct = None
+        if distinct is not None:
+            if any(map(_missing, distinct)):
+                raise missing
+            try:
+                # Renumber them in sorted order. np.unique merges equal labels
+                # that hash differently (np.float32(0.1) and 0.1), so leave
+                # those to it.
+                order = sorted(range(len(distinct)), key=distinct.__getitem__)
+                ordered = [distinct[i] for i in order]
+                if all(map(operator.lt, ordered, ordered[1:])):
+                    rank = np.empty(len(distinct), dtype=np.intp)
+                    rank[order] = np.arange(len(distinct))
+                    return rank[codes], len(distinct)
+            except (TypeError, ValueError, OverflowError):  # labels that cannot be sorted
+                pass
+    uniques, codes = np.unique(labels, return_inverse=True)
+    return codes.reshape(-1), len(uniques)
 
 
 def _numbers(values, name):
@@ -149,8 +244,10 @@ def run_harmony(
     ncores : int, optional
         Number of threads, at most the number of CPUs this process may use
         (its CPU affinity, where the platform reports it). Default is 0,
-        which uses all of them; in a container limited by a CPU quota, set
-        it explicitly. Results are the same for any value.
+        which uses one thread per physical core of those CPUs, since a
+        second thread per core (hyperthreading) adds little speed. In a
+        container limited by a CPU quota, set it explicitly. Results are the
+        same for any value.
 
     Returns
     -------
@@ -195,8 +292,7 @@ def run_harmony(
     phi_n = np.empty(len(vars_use), dtype=int)
     offset = 0
     for c, var in enumerate(vars_use):
-        uniques, codes = np.unique(np.asarray(meta_data[var]), return_inverse=True)
-        n_levels = len(uniques)
+        codes, n_levels = _factorize(meta_data[var], f"meta_data[{var!r}]")
         batch_of_cell[c] = codes + offset
         phi_n[c] = n_levels
         offset += n_levels
@@ -258,6 +354,10 @@ def run_harmony(
     else:
         lamb_cpp = lamb.astype(np.float64)
 
+    # ncores threads, or by default one per physical core, at most one per CPU
+    cpus = _available_cores()
+    n_threads = min(int(ncores) if ncores > 0 else _physical_cores() or cpus, cpus)
+
     cpp_harmony = HarmonyCpp(
         data_f64,
         batch_of_cell_c,
@@ -276,7 +376,7 @@ def run_harmony(
         float(batch_prop_cutoff),
         verbose,
         random_state if random_state is not None else 0,
-        min(int(ncores), _available_cores()) if ncores > 0 else _available_cores(),
+        n_threads,
         logger.info,
     )
     return Harmony(cpp_harmony)

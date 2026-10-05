@@ -30,6 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.environ.get("HISTORY", os.path.join(HERE, "harmonypy-0.2-april-2026.json"))
 MAIN, OLD = "main-623ff51", "2.0.2"
 NEXT = os.environ.get("NEXT_LABEL", "next release")
+THE_NEXT = NEXT if NEXT[0].isdigit() else f"the {NEXT}"  # in running text
+SHORT = NEXT if NEXT[0].isdigit() else "next"  # in table headers
 COMMIT = MAIN.split("-")[-1]
 CELL_SETS = ["1M", "2M", "4M", "8M", "16M", "full"]
 SAMPLE_SETS = ["50B", "100B", "200B", "400B", "800B"]
@@ -131,7 +133,7 @@ def iteration_note(cells, samples, full):
     exceptions = [(b, d, v) for b, d, v in runs if v["iterations"] != [usual]]
     note = f"every run converged after {plural(usual)}"
     if exceptions:
-        names = {OLD: "2.0.2", MAIN: f"the {NEXT}"}
+        names = {OLD: "2.0.2", MAIN: THE_NEXT}
         where = lambda d: "all cells" if d == full else (f"{d:g}M cells" if isinstance(d, float) else f"{d} samples")
         note += " except " + ", ".join(f"{names[b]} on {where(d)} ({'/'.join(map(str, v['iterations']))})"
                                        for b, d, v in exceptions)
@@ -362,7 +364,7 @@ def main():
         o, m = cells[OLD][x], cells[MAIN][x]
         why = ""
         if o["iterations"] != m["iterations"]:
-            why = (f", where 2.0.2 needed {'/'.join(map(str, o['iterations']))} iterations and the {NEXT} "
+            why = (f", where 2.0.2 needed {'/'.join(map(str, o['iterations']))} iterations and {THE_NEXT} "
                    f"{'/'.join(map(str, m['iterations']))}")
         sub_head.append(f"{o['wall'] / m['wall']:.0f}× faster than 2.0.2 {where} ({fmt_time(o['wall'])}{why})")
         if why:
@@ -407,7 +409,7 @@ def main():
         return f"median of {r[0]}–{r[-1]} runs" if r[0] > 1 else f"one to {r[-1]} runs, median"
 
     reps = "; ".join(f"{name}: {repeats(b)}" for b, name in ((MAIN, NEXT), (OLD, "2.0.2")) if repeats(b))
-    builds = [name for b, name in ((OLD, "2.0.2"), (MAIN, f"the {NEXT}")) if any(k[0] == b for k in configs)]
+    builds = [name for b, name in ((OLD, "2.0.2"), (MAIN, THE_NEXT)) if any(k[0] == b for k in configs)]
     iters = iteration_note(cells, samples, full)
     note = (
         f"Data: Tahoe-100M, 50 PCs, corrected for sample; the 1–16 million cell subsamples have 800 samples, all "
@@ -417,7 +419,7 @@ def main():
         f"(epsilon_harmony 1e-4 instead of 1e-2, up to 20 k-means rounds instead of 4), and its memory is what the "
         f"process held after the run, not its peak. Run time: run_harmony plus reading the corrected coordinates "
         f"(h.Z_corr), loading excluded ({reps}). Peak memory: the whole process, input included. Machine: a shared "
-        f"server, 2× AMD EPYC 7543 (64 cores, 128 threads), 3 TB RAM. The {NEXT} (commit {COMMIT}) used all 128 "
+        f"server, 2× AMD EPYC 7543 (64 cores, 128 threads), 3 TB RAM. {THE_NEXT[0].upper() + THE_NEXT[1:]} (commit {COMMIT}) used all 128 "
         f"threads, its default, except in d."
     )
     fig.text(0.012, 0.085, textwrap.fill(note, 200), fontsize=8, color="#444444", va="top", linespacing=1.35)
@@ -439,8 +441,8 @@ def write_summary(out, configs, failed, hist, cells, samples, threads, corr, ful
              "the range and count. C++ is the time inside the compiled backend; the rest of run_harmony is "
              "Python preprocessing (mostly encoding the sample labels). Memory is the peak of the whole process.",
              "",
-             "| Dataset | Cells | Samples | 0.2 (Apr 2026) | 2.0.2 | next release | 2.0.2 / next | "
-             "next: C++ / Python / Z_corr | Peak memory 2.0.2 / next | Iterations |",
+             f"| Dataset | Cells | Samples | 0.2 (Apr 2026) | 2.0.2 | {NEXT} | 2.0.2 / {SHORT} | "
+             f"{SHORT}: C++ / Python / Z_corr | Peak memory 2.0.2 / {SHORT} | Iterations |",
              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     rows = [(d, samples, int(d[:-1]), hist_samples.get(int(d[:-1]))) for d in SAMPLE_SETS]
     rows += [(d, cells, full if d == "full" else float(d[:-1]),
@@ -454,7 +456,7 @@ def write_summary(out, configs, failed, hist, cells, samples, threads, corr, ful
         split = (f"{fmt_time(m['cpp'])} / {fmt_time(max(0.0, m['run'] - m['cpp']))} / {fmt_time(m['extract'])}"
                  if m else "")
         mem = " / ".join(f"{v['peak']:.1f}" if v else "–" for v in (o, m)) + " GB"
-        its = ", ".join(f"{b}: {'/'.join(map(str, v['iterations']))}" for b, v in (("2.0.2", o), ("next", m)) if v)
+        its = ", ".join(f"{b}: {'/'.join(map(str, v['iterations']))}" for b, v in (("2.0.2", o), (SHORT, m)) if v)
         lines.append(
             f"| {d} | {ref['n_cells']:,} | {ref['n_batches']} | {fmt_time(h) if h else ''} | "
             f"{fmt_time(o['wall']) + spread(o) if o else ''} | {fmt_time(m['wall']) + spread(m) if m else ''} | "
@@ -462,7 +464,7 @@ def write_summary(out, configs, failed, hist, cells, samples, threads, corr, ful
     for d in ("1M", "16M"):
         if threads[d]:
             first_n, first = threads[d][0]
-            lines += ["", f"## Threads, {d} cells (next release)", "",
+            lines += ["", f"## Threads, {d} cells ({NEXT})", "",
                       f"| Threads | Run time | Speedup over {first_n} thread{'s' if first_n > 1 else ''} | "
                       "CPU time | Other users' CPU during the run |", "|---:|---:|---:|---:|---:|"]
             for n, v in threads[d]:

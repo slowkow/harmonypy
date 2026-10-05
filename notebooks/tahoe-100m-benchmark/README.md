@@ -1,24 +1,24 @@
 # harmonypy on Tahoe-100M: all 95.6 million cells in 4.9 minutes
 
-This folder holds the run-time benchmark of harmonypy's C++ rewrite
-([#58](https://github.com/slowkow/harmonypy/pull/58), commit 623ff51) against
-the 2.0.2 release on the Tahoe-100M dataset: 50 PCs of 95,596,109 cells from
+This folder holds the run-time benchmark of harmonypy 2.1.0's C++ rewrite
+([#58](https://github.com/slowkow/harmonypy/pull/58), commit 623ff51, before
+the label-encoding change of #59) against 2.0.2 on the Tahoe-100M dataset: 50 PCs of 95,596,109 cells from
 1,344 samples, and subsamples of 1 to 16 million cells. It ran on
 2026-10-04 on a shared server (2× AMD EPYC 7543, 64 cores, 3 TB RAM).
 
 ![Run time and memory of harmonypy on Tahoe-100M](benchmark-2026-10.png)
 
-| Cells | Samples | 2.0.2 | Next release | Faster | Peak memory, 2.0.2 → next | Iterations, 2.0.2 / next |
+| Cells | Samples | 2.0.2 | 2.1.0 | Faster | Peak memory, 2.0.2 → 2.1.0 | Iterations, 2.0.2 / 2.1.0 |
 |---|---:|---:|---:|---:|---:|---:|
 | 1 million | 800 | 1.0 min | 3.9 s | 16× | 3.3 → 2.4 GB | 1 / 1 |
 | 16 million | 800 | 18 min | 40 s | 28× | 50 → 36 GB | 1 / 1 |
 | All 95.6 million | 1,344 | 4.5 h | 4.9 min | 55× | 294 → 214 GB | 3 / 1 |
 
-- On the full dataset, 2.0.2 ran 3 Harmony iterations and the next release 1,
+- On the full dataset, 2.0.2 ran 3 Harmony iterations and 2.1.0 ran 1,
   so the 55× includes 2.0.2's extra iterations. The two builds use the same
   convergence rule, but 2.0.2 sums the objective in single precision, which
   on large inputs can change when it stops. With the same number of
-  iterations (1 and 16 million cells) the next release is 16-28× faster, and
+  iterations (1 and 16 million cells) 2.1.0 is 16-28× faster, and
   3.3× faster even on one thread.
 - The corrected coordinates agree with 2.0.2's: on 1 and 16 million cells,
   each PC's correlation differs from 1 by less than 1e-9.
@@ -89,6 +89,5 @@ setsid -f nohup ./run.sh > run.log 2>&1 < /dev/null   # all stages, about 7.5 ho
 ```
 
 To benchmark another build, make a venv with its wheel, add a `--build` label
-for it in `run.sh`, and set `MAIN` in `plot.py`. Set `NEXT_LABEL` (for
-example `NEXT_LABEL=2.1.0`) once the version number is chosen, so the figure
-names it.
+for it in `run.sh`, and set `MAIN` and `NEXT_LABEL` in `plot.py` (or the
+`NEXT_LABEL` environment variable) so the figure names it.

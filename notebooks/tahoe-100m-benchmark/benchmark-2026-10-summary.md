@@ -1,22 +1,22 @@
-# Tahoe-100M benchmark: harmonypy next release (commit 623ff51) vs 2.0.2
+# Tahoe-100M benchmark: harmonypy 2.1.0 (commit 623ff51) vs 2.0.2
 
 Run time is run_harmony plus reading h.Z_corr (loading excluded): the median of the repeats, with the range and count. C++ is the time inside the compiled backend; the rest of run_harmony is Python preprocessing (mostly encoding the sample labels). Memory is the peak of the whole process.
 
-| Dataset | Cells | Samples | 0.2 (Apr 2026) | 2.0.2 | next release | 2.0.2 / next | next: C++ / Python / Z_corr | Peak memory 2.0.2 / next | Iterations |
+| Dataset | Cells | Samples | 0.2 (Apr 2026) | 2.0.2 | 2.1.0 | 2.0.2 / 2.1.0 | 2.1.0: C++ / Python / Z_corr | Peak memory 2.0.2 / 2.1.0 | Iterations |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 50B | 1,000,000 | 50 | 5.0 min | 58 s | 4.1 s (3.9 s–4.2 s, n=5) | 14x | 3.0 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 100B | 1,000,000 | 100 | 4.3 min | 58 s | 4.1 s (3.9 s–4.1 s, n=5) | 14x | 3.0 s / 0.7 s / 0.4 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 200B | 1,000,000 | 200 | 6.4 min | 59 s | 4.0 s (3.8 s–4.0 s, n=5) | 15x | 2.8 s / 0.8 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 400B | 1,000,000 | 400 | 11 min | 60 s | 3.9 s (3.8 s–4.0 s, n=5) | 15x | 2.8 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 800B | 1,000,000 | 800 | 23 min | 1.0 min | 4.0 s (3.8 s–4.1 s, n=5) | 15x | 3.0 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 1M | 1,000,000 | 800 | 21 min | 1.0 min (1.0 min–1.0 min, n=3) | 3.9 s (3.7 s–4.1 s, n=5) | 16x | 2.9 s / 0.7 s / 0.4 s | 3.3 / 2.4 GB | 2.0.2: 1, next: 1 |
-| 2M | 2,000,000 | 800 | 35 min | 2.1 min | 6.7 s (6.6 s–6.8 s, n=5) | 19x | 4.6 s / 1.5 s / 0.6 s | 6.4 / 4.7 GB | 2.0.2: 1, next: 1 |
-| 4M | 4,000,000 | 800 | 55 min | 4.3 min | 12 s (12 s–12 s, n=5) | 21x | 7.9 s / 3.1 s / 1.2 s | 12.7 / 9.3 GB | 2.0.2: 1, next: 1 |
-| 8M | 8,000,000 | 800 | 1.7 h | 8.7 min | 23 s (23 s–23 s, n=5) | 23x | 14 s / 6.6 s / 2.3 s | 25.2 / 18.1 GB | 2.0.2: 1, next: 1 |
-| 16M | 16,000,000 | 800 | 3.8 h | 18 min (18 min–19 min, n=3) | 40 s (40 s–41 s, n=5) | 28x | 21 s / 14 s / 4.4 s | 50.0 / 36.0 GB | 2.0.2: 1, next: 1 |
-| full | 95,596,109 | 1344 |  | 4.5 h | 4.9 min (3.9 min–6.4 min, n=3) | 55x | 2.0 min / 1.6 min / 31 s | 294.5 / 214.3 GB | 2.0.2: 3, next: 1 |
+| 50B | 1,000,000 | 50 | 5.0 min | 58 s | 4.1 s (3.9 s–4.2 s, n=5) | 14x | 3.0 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 100B | 1,000,000 | 100 | 4.3 min | 58 s | 4.1 s (3.9 s–4.1 s, n=5) | 14x | 3.0 s / 0.7 s / 0.4 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 200B | 1,000,000 | 200 | 6.4 min | 59 s | 4.0 s (3.8 s–4.0 s, n=5) | 15x | 2.8 s / 0.8 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 400B | 1,000,000 | 400 | 11 min | 60 s | 3.9 s (3.8 s–4.0 s, n=5) | 15x | 2.8 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 800B | 1,000,000 | 800 | 23 min | 1.0 min | 4.0 s (3.8 s–4.1 s, n=5) | 15x | 3.0 s / 0.7 s / 0.3 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 1M | 1,000,000 | 800 | 21 min | 1.0 min (1.0 min–1.0 min, n=3) | 3.9 s (3.7 s–4.1 s, n=5) | 16x | 2.9 s / 0.7 s / 0.4 s | 3.3 / 2.4 GB | 2.0.2: 1, 2.1.0: 1 |
+| 2M | 2,000,000 | 800 | 35 min | 2.1 min | 6.7 s (6.6 s–6.8 s, n=5) | 19x | 4.6 s / 1.5 s / 0.6 s | 6.4 / 4.7 GB | 2.0.2: 1, 2.1.0: 1 |
+| 4M | 4,000,000 | 800 | 55 min | 4.3 min | 12 s (12 s–12 s, n=5) | 21x | 7.9 s / 3.1 s / 1.2 s | 12.7 / 9.3 GB | 2.0.2: 1, 2.1.0: 1 |
+| 8M | 8,000,000 | 800 | 1.7 h | 8.7 min | 23 s (23 s–23 s, n=5) | 23x | 14 s / 6.6 s / 2.3 s | 25.2 / 18.1 GB | 2.0.2: 1, 2.1.0: 1 |
+| 16M | 16,000,000 | 800 | 3.8 h | 18 min (18 min–19 min, n=3) | 40 s (40 s–41 s, n=5) | 28x | 21 s / 14 s / 4.4 s | 50.0 / 36.0 GB | 2.0.2: 1, 2.1.0: 1 |
+| full | 95,596,109 | 1344 |  | 4.5 h | 4.9 min (3.9 min–6.4 min, n=3) | 55x | 2.0 min / 1.6 min / 31 s | 294.5 / 214.3 GB | 2.0.2: 3, 2.1.0: 1 |
 
-## Threads, 1M cells (next release)
+## Threads, 1M cells (2.1.0)
 
 | Threads | Run time | Speedup over 1 thread | CPU time | Other users' CPU during the run |
 |---:|---:|---:|---:|---:|
@@ -29,7 +29,7 @@ Run time is run_harmony plus reading h.Z_corr (loading excluded): the median of 
 | 64 | 3.7 s (3.5 s–3.7 s, n=3) | 5.3x | 1.4 min | 22 s |
 | 128 | 3.9 s (3.7 s–4.1 s, n=5) | 5.1x | 2.4 min | 0.3 s |
 
-## Threads, 16M cells (next release)
+## Threads, 16M cells (2.1.0)
 
 | Threads | Run time | Speedup over 1 thread | CPU time | Other users' CPU during the run |
 |---:|---:|---:|---:|---:|

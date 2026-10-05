@@ -21,10 +21,21 @@
 - The work, including the large matrix products and each cluster's ridge
   system, runs on a pool of threads (no OpenMP). Results are identical for
   any `ncores`. On one thread, the 858k-cell run takes 18.0 s. On a 6-core
-  Linux laptop (AMD Ryzen 5 5560U), it takes 5.7 s instead of 114 s with the
+  Linux laptop (AMD Ryzen 5 5560U), it takes 5.2 s instead of 114 s with the
   2.0.2 wheel.
 - Peak memory for the 858k-cell run is 1.7 GB instead of 2.7 GB (the whole
   process, on macOS with default settings).
+- String and other non-numeric batch labels are numbered in one pass
+  through a hash table, as `pandas.factorize` does, instead of by sorting
+  every label with `np.unique`. Only the distinct labels are sorted, and
+  labels that a hash table would number differently (equal labels that hash
+  differently, such as `np.float32(0.1)` and `0.1`) still go through
+  `np.unique`, so the numbering is unchanged. On an M1 Ultra, numbering 16 million string labels with 800
+  distinct values takes 0.5-1.5 s instead of 7-23 s, depending on how they
+  are stored, and the batch and sample labels of the 858k-cell dataset, as
+  pandas 3 string columns, take 0.14 s instead of 1.3 s. A pandas
+  `Categorical`, as in AnnData's `obs`, is renumbered from its codes (0.08 s
+  for 16 million labels). `compute_lisi` numbers its labels the same way.
 
 ### Changed
 - harmonypy no longer uses BLAS or LAPACK. Each cluster's ridge system is
@@ -36,10 +47,12 @@
   compiler and the Python headers (CMake and the Armadillo headers are
   downloaded if they are missing).
 - `ncores` sets the number of threads harmonypy uses, at most the number of
-  CPUs available to the process; the default (0) uses all of them.
-  Previously it set `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS` after the
-  BLAS library had read them, which had no effect, and these variables are
-  no longer set.
+  CPUs available to the process. The default (0) uses one thread per
+  physical core of those CPUs: a second thread per core (hyperthreading) made
+  Harmony about 5% faster on a 6-core laptop and no faster on a 64-core
+  server, where it used 70% more CPU time. Previously it set
+  `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS` after the BLAS library had
+  read them, which had no effect, and these variables are no longer set.
 - The objective is accumulated in double precision. The float32 sums were
   off by about 0.7% on 858k cells, and by much more for inputs with large
   values, which could flip the convergence check when the objective barely
@@ -50,6 +63,11 @@
   0.99998 against the 2.0.2 wheel on Linux. The per-PC correlation with
   stored R Harmony outputs is the same to 3 decimals.
 - `Harmony.Z_corr`, `Z_orig`, `Z_cos` and `R` are now C-contiguous arrays.
+- A batch variable with missing labels (None, NaN, NaT or `pandas.NA`)
+  raises a `ValueError` that names the column, in `run_harmony` and
+  `compute_lisi`. Before, string labels with a missing value raised a
+  `TypeError` from sorting, and in numeric labels the missing cells became a
+  batch of their own, or one batch each in an object column.
 - Coordinates with NaN or infinite values raise `ValueError`; before, a NaN
   could make the k-means start loop forever. A `sigma`, `theta` or `lamb` of
   the wrong length raises `ValueError`, as does a negative or non-finite `lamb`

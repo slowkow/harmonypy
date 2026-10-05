@@ -98,10 +98,10 @@ sc.tl.leiden(adata)
 | `max_iter_harmony` | 10 | Maximum Harmony iterations |
 | `max_iter_kmeans` | 4 | K-means iterations per Harmony round |
 | `epsilon_harmony` | 1e-2 | Convergence threshold |
-| `ncores` | 0 | Threads (0 = every CPU available to the process) |
+| `ncores` | 0 | Threads (0 = one per physical core available to the process) |
 | `lamb` | None | Ridge penalty (None = auto-estimate) |
 
-harmonypy runs on its own pool of threads (it uses no BLAS, LAPACK or OpenMP). `ncores` sets the number of threads; the default (0) uses every CPU available to the process, which on Linux respects CPU affinity (e.g. Slurm or `taskset`) but not container CPU quotas, so set `ncores` explicitly there. Results are identical for any `ncores`.
+harmonypy runs on its own pool of threads (it uses no BLAS, LAPACK or OpenMP). `ncores` sets the number of threads; the default (0) uses one per physical core available to the process. A second thread per core (hyperthreading) made Harmony about 5% faster on a 6-core laptop and no faster on a 64-core server, where it used 70% more CPU time. On Linux the default respects CPU affinity (e.g. Slurm or `taskset`) but not container CPU quotas, so set `ncores` explicitly there. Results are identical for any `ncores`.
 
 
 ## Performance
@@ -124,10 +124,10 @@ Ryzen 5 5560U), compared with the 2.0.2 wheel:
 ```
   Dataset                                   2.0.2    this version
   --------------------------------------- -------- ---------------
-  Small (3.5k cells, 3 donors)               0.35s           0.06s
-  Medium (69k cells, 11 batches)             6.66s           0.60s
-  Large (858k cells, 120 batches)          114.40s           5.69s
-  Large, by batch and sample (870 levels)  242.14s           9.86s
+  Small (3.5k cells, 3 donors)               0.33s           0.06s
+  Medium (69k cells, 11 batches)             6.86s           0.54s
+  Large (858k cells, 120 batches)          113.78s           5.18s
+  Large, by batch and sample (870 levels)  244.32s           9.15s
 ```
 
 `scripts/compare_outputs.py` compares the results and run times of two builds.

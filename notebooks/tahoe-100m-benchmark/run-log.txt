@@ -1,0 +1,133 @@
+== 2026-10-04 17:56:13 venv-main/bin/python bench.py --build main-623ff51 --dataset 50B --sweep samples
+== 2026-10-04 17:56:18 venv-main/bin/python bench.py --build main-623ff51 --dataset 50B --sweep samples
+== 2026-10-04 17:56:23 venv-main/bin/python bench.py --build main-623ff51 --dataset 50B --sweep samples
+== 2026-10-04 17:56:28 venv-main/bin/python bench.py --build main-623ff51 --dataset 50B --sweep samples
+== 2026-10-04 17:56:33 venv-main/bin/python bench.py --build main-623ff51 --dataset 50B --sweep samples
+== 2026-10-04 17:56:38 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 50B --sweep samples
+== 2026-10-04 17:57:36 venv-main/bin/python bench.py --build main-623ff51 --dataset 100B --sweep samples
+== 2026-10-04 17:57:41 venv-main/bin/python bench.py --build main-623ff51 --dataset 100B --sweep samples
+== 2026-10-04 17:57:46 venv-main/bin/python bench.py --build main-623ff51 --dataset 100B --sweep samples
+== 2026-10-04 17:57:51 venv-main/bin/python bench.py --build main-623ff51 --dataset 100B --sweep samples
+== 2026-10-04 17:57:56 venv-main/bin/python bench.py --build main-623ff51 --dataset 100B --sweep samples
+== 2026-10-04 17:58:01 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 100B --sweep samples
+== 2026-10-04 17:59:00 venv-main/bin/python bench.py --build main-623ff51 --dataset 200B --sweep samples
+== 2026-10-04 17:59:04 venv-main/bin/python bench.py --build main-623ff51 --dataset 200B --sweep samples
+== 2026-10-04 17:59:09 venv-main/bin/python bench.py --build main-623ff51 --dataset 200B --sweep samples
+== 2026-10-04 17:59:14 venv-main/bin/python bench.py --build main-623ff51 --dataset 200B --sweep samples
+== 2026-10-04 17:59:19 venv-main/bin/python bench.py --build main-623ff51 --dataset 200B --sweep samples
+== 2026-10-04 17:59:24 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 200B --sweep samples
+== 2026-10-04 18:00:23 venv-main/bin/python bench.py --build main-623ff51 --dataset 400B --sweep samples
+== 2026-10-04 18:00:28 venv-main/bin/python bench.py --build main-623ff51 --dataset 400B --sweep samples
+== 2026-10-04 18:00:33 venv-main/bin/python bench.py --build main-623ff51 --dataset 400B --sweep samples
+== 2026-10-04 18:00:37 venv-main/bin/python bench.py --build main-623ff51 --dataset 400B --sweep samples
+== 2026-10-04 18:00:42 venv-main/bin/python bench.py --build main-623ff51 --dataset 400B --sweep samples
+== 2026-10-04 18:00:46 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 400B --sweep samples
+== 2026-10-04 18:01:47 venv-main/bin/python bench.py --build main-623ff51 --dataset 800B --sweep samples
+== 2026-10-04 18:01:52 venv-main/bin/python bench.py --build main-623ff51 --dataset 800B --sweep samples
+== 2026-10-04 18:01:56 venv-main/bin/python bench.py --build main-623ff51 --dataset 800B --sweep samples
+== 2026-10-04 18:02:01 venv-main/bin/python bench.py --build main-623ff51 --dataset 800B --sweep samples
+== 2026-10-04 18:02:06 venv-main/bin/python bench.py --build main-623ff51 --dataset 800B --sweep samples
+== 2026-10-04 18:02:11 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 800B --sweep samples
+== 2026-10-04 18:03:14 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep cells --save Z/main-1M.npy
+== 2026-10-04 18:03:18 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep cells
+== 2026-10-04 18:03:23 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep cells
+== 2026-10-04 18:03:28 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep cells
+== 2026-10-04 18:03:33 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep cells
+== 2026-10-04 18:03:37 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 1M --sweep cells --save Z/2.0.2-1M.npy
+== 2026-10-04 18:04:40 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 1M --sweep cells
+== 2026-10-04 18:05:43 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 1M --sweep cells
+== 2026-10-04 18:06:45 venv-main/bin/python bench.py --build main-623ff51 --dataset 2M --sweep cells
+== 2026-10-04 18:06:53 venv-main/bin/python bench.py --build main-623ff51 --dataset 2M --sweep cells
+== 2026-10-04 18:07:01 venv-main/bin/python bench.py --build main-623ff51 --dataset 2M --sweep cells
+== 2026-10-04 18:07:09 venv-main/bin/python bench.py --build main-623ff51 --dataset 2M --sweep cells
+== 2026-10-04 18:07:16 venv-main/bin/python bench.py --build main-623ff51 --dataset 2M --sweep cells
+== 2026-10-04 18:07:24 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 2M --sweep cells
+== 2026-10-04 18:09:32 venv-main/bin/python bench.py --build main-623ff51 --dataset 4M --sweep cells
+== 2026-10-04 18:09:46 venv-main/bin/python bench.py --build main-623ff51 --dataset 4M --sweep cells
+== 2026-10-04 18:10:00 venv-main/bin/python bench.py --build main-623ff51 --dataset 4M --sweep cells
+== 2026-10-04 18:10:14 venv-main/bin/python bench.py --build main-623ff51 --dataset 4M --sweep cells
+== 2026-10-04 18:10:28 venv-main/bin/python bench.py --build main-623ff51 --dataset 4M --sweep cells
+== 2026-10-04 18:10:42 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 4M --sweep cells
+== 2026-10-04 18:15:01 venv-main/bin/python bench.py --build main-623ff51 --dataset 8M --sweep cells
+== 2026-10-04 18:15:27 venv-main/bin/python bench.py --build main-623ff51 --dataset 8M --sweep cells
+== 2026-10-04 18:15:53 venv-main/bin/python bench.py --build main-623ff51 --dataset 8M --sweep cells
+== 2026-10-04 18:16:18 venv-main/bin/python bench.py --build main-623ff51 --dataset 8M --sweep cells
+== 2026-10-04 18:16:45 venv-main/bin/python bench.py --build main-623ff51 --dataset 8M --sweep cells
+== 2026-10-04 18:17:10 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 8M --sweep cells
+== 2026-10-04 18:25:54 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep cells --save Z/main-16M.npy
+== 2026-10-04 18:26:44 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep cells
+== 2026-10-04 18:27:29 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep cells
+== 2026-10-04 18:28:15 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep cells
+== 2026-10-04 18:29:00 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep cells
+== 2026-10-04 18:29:45 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 16M --sweep cells --save Z/2.0.2-16M.npy
+== 2026-10-04 18:48:08 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 16M --sweep cells
+== 2026-10-04 19:06:28 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 16M --sweep cells
+== 2026-10-04 19:25:34 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 1
+== 2026-10-04 19:25:54 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 2
+== 2026-10-04 19:26:06 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 4
+== 2026-10-04 19:26:14 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 8
+== 2026-10-04 19:26:20 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 16
+== 2026-10-04 19:26:24 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 32
+== 2026-10-04 19:26:28 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 64
+== 2026-10-04 19:26:33 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 1
+== 2026-10-04 19:26:53 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 2
+== 2026-10-04 19:27:05 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 4
+== 2026-10-04 19:27:13 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 8
+== 2026-10-04 19:27:18 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 16
+== 2026-10-04 19:27:23 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 32
+== 2026-10-04 19:27:27 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 64
+== 2026-10-04 19:27:31 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 1
+== 2026-10-04 19:27:52 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 2
+== 2026-10-04 19:28:03 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 4
+== 2026-10-04 19:28:10 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 8
+== 2026-10-04 19:28:16 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 16
+== 2026-10-04 19:28:21 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 32
+== 2026-10-04 19:28:25 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep threads --ncores 64
+== 2026-10-04 19:28:29 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 1
+== 2026-10-04 19:34:01 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 2
+== 2026-10-04 19:37:12 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 4
+== 2026-10-04 19:39:03 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 8
+== 2026-10-04 19:40:13 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 16
+== 2026-10-04 19:41:10 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 32
+== 2026-10-04 19:42:05 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 64
+== 2026-10-04 19:42:49 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 1
+== 2026-10-04 19:48:55 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 2
+== 2026-10-04 19:52:08 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 4
+== 2026-10-04 19:54:06 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 8
+== 2026-10-04 19:55:20 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 16
+== 2026-10-04 19:56:15 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 32
+== 2026-10-04 19:57:01 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 64
+== 2026-10-04 19:57:47 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 1
+== 2026-10-04 20:03:21 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 2
+== 2026-10-04 20:06:25 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 4
+== 2026-10-04 20:08:12 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 8
+== 2026-10-04 20:09:22 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 16
+== 2026-10-04 20:10:16 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 32
+== 2026-10-04 20:11:02 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep threads --ncores 64
+== 2026-10-04 20:11:46 venv-main/bin/python bench.py --build main-623ff51 --dataset full --sweep cells
+== 2026-10-04 20:16:58 venv-main/bin/python bench.py --build main-623ff51 --dataset full --sweep cells
+== 2026-10-04 20:23:45 venv-main/bin/python bench.py --build main-623ff51 --dataset full --sweep cells
+== 2026-10-04 20:28:00 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:28:10 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:29:35 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:29:44 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:31:05 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:31:15 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:32:37 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset 1M --sweep forced10 --kwargs {"max_iter_harmony": 10, "epsilon_harmony": -1}
+== 2026-10-04 20:37:47 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:37:55 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:39:23 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:39:31 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:40:59 venv-main/bin/python bench.py --build main-623ff51 --dataset 1M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:41:08 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep settings-0.2 --kwargs {"max_iter_kmeans": 20, "epsilon_cluster": 1e-5, "epsilon_harmony": 1e-4, "lamb": 1}
+== 2026-10-04 20:42:38 taskset -c 0-31 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 32
+== 2026-10-04 20:43:23 taskset -c 0-31,64-95 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:44:08 taskset -c 0-63 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:44:52 taskset -c 0-31 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 32
+== 2026-10-04 20:45:37 taskset -c 0-31,64-95 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:46:22 taskset -c 0-63 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:47:07 taskset -c 0-31 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 32
+== 2026-10-04 20:47:52 taskset -c 0-31,64-95 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:48:37 taskset -c 0-63 venv-main/bin/python bench.py --build main-623ff51 --dataset 16M --sweep pinned --ncores 64
+== 2026-10-04 20:49:20 venv-2.0.2/bin/python bench.py --build 2.0.2 --dataset full --sweep cells
+== 2026-10-05 01:19:46 done

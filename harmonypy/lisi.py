@@ -17,7 +17,7 @@
 
 import numpy as np
 from typing import Iterable
-from harmonypy._harmony_cpp import compute_lisi_cpp
+from harmonypy._harmony_cpp import compute_lisi_cpp, compute_lisi_columns_cpp
 from harmonypy.harmony import _factorize
 
 
@@ -50,8 +50,14 @@ def compute_lisi(
     n_cells = np.asarray(X).shape[0]
     n_labels = len(label_colnames)
     X_arr = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
-    lisi_df = np.zeros((n_cells, n_labels))
+    if n_labels == 0:
+        return np.zeros((n_cells, 0))
+    label_codes = np.empty((n_labels, n_cells), dtype=np.int32)
+    category_counts = np.empty(n_labels, dtype=np.int32)
     for i, label in enumerate(label_colnames):
         codes, n_categories = _factorize(metadata[label], f"metadata[{label!r}]")
-        lisi_df[:, i] = compute_lisi_cpp(X_arr, codes.astype(np.int32), n_categories, perplexity)
-    return lisi_df
+        if len(codes) != n_cells:
+            raise ValueError(f"metadata[{label!r}] must have one label per cell")
+        label_codes[i] = codes
+        category_counts[i] = n_categories
+    return compute_lisi_columns_cpp(X_arr, label_codes, category_counts, perplexity)

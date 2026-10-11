@@ -118,17 +118,17 @@ private:
     }
 };
 
-// Compute Simpson's index for one cell given its neighbor distances and labels
-inline double compute_simpson_one(
-    const double* distances, const int* indices, int n_neighbors,
-    const int* labels, int n_categories, double perplexity, double tol = 1e-5
+// Neighbor probabilities depend on distances, not the metadata labels.
+inline bool compute_neighbor_probabilities(
+    const double* distances, int n_neighbors, double perplexity,
+    std::vector<double>& P, double tol = 1e-5
 ) {
     double logU = std::log(perplexity);
     double beta = 1.0;
     double betamin = -std::numeric_limits<double>::infinity();
     double betamax = std::numeric_limits<double>::infinity();
 
-    std::vector<double> P(n_neighbors);
+    P.resize(n_neighbors);
     double H = 0, P_sum = 0;
 
     // Binary search for beta that gives the target perplexity
@@ -160,11 +160,16 @@ inline double compute_simpson_one(
         }
     }
 
-    if (H == 0) return -1.0;
+    return H != 0;
+}
 
+inline double compute_simpson_probabilities(
+    const std::vector<double>& P, const int* indices,
+    const int* labels, int n_categories
+) {
     // Simpson's index: sum of squared category probabilities
     std::vector<double> cat_prob(n_categories, 0.0);
-    for (int j = 0; j < n_neighbors; ++j) {
+    for (size_t j = 0; j < P.size(); ++j) {
         cat_prob[labels[indices[j]]] += P[j];
     }
     double simpson = 0.0;
@@ -172,6 +177,17 @@ inline double compute_simpson_one(
         simpson += cat_prob[c] * cat_prob[c];
     }
     return simpson;
+}
+
+// Keep the single-column implementation available to existing callers.
+inline double compute_simpson_one(
+    const double* distances, const int* indices, int n_neighbors,
+    const int* labels, int n_categories, double perplexity, double tol = 1e-5
+) {
+    std::vector<double> P;
+    if (!compute_neighbor_probabilities(distances, n_neighbors, perplexity, P, tol))
+        return -1.0;
+    return compute_simpson_probabilities(P, indices, labels, n_categories);
 }
 
 // Compute LISI for all cells
@@ -201,6 +217,33 @@ inline arma::vec compute_lisi_impl(
         lisi_result(i) = (simpson > 0) ? 1.0 / simpson : 0.0;
     }
     return lisi_result;
+}
+
+// Labels are stored as contiguous columns (n_labels x N). Stream one
+// neighborhood at a time rather than retaining an N x k neighbor cache.
+inline void compute_lisi_columns_impl(
+    const arma::mat& X, const int* labels, const int* n_categories,
+    size_t n_labels, double perplexity, double* result
+) {
+    const int N = X.n_rows;
+    const int k = static_cast<int>(perplexity * 3);
+    KDTree tree(X);
+    std::vector<int> nn_idx;
+    std::vector<double> nn_dist, probabilities;
+
+    for (int i = 0; i < N; ++i) {
+        tree.knn(i, k, nn_idx, nn_dist);
+        const bool valid = compute_neighbor_probabilities(
+            nn_dist.data(), nn_idx.size(), perplexity, probabilities
+        );
+        for (size_t column = 0; column < n_labels; ++column) {
+            const double simpson = valid ? compute_simpson_probabilities(
+                probabilities, nn_idx.data(), labels + column * N,
+                n_categories[column]
+            ) : -1.0;
+            result[i * n_labels + column] = simpson > 0 ? 1.0 / simpson : 0.0;
+        }
+    }
 }
 
 } // namespace lisi

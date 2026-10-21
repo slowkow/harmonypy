@@ -278,4 +278,48 @@ NB_MODULE(_harmony_cpp, m) {
         nb::rv_policy::move,
         "Compute LISI for one label column. Returns N-length array of LISI values."
     );
+
+    using NpInt32_2D_RO = nb::ndarray<const int, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+    using NpCounts_RO = nb::ndarray<const int, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+    m.def("compute_lisi_columns_cpp",
+        [](NpConstDouble2D X, NpInt32_2D_RO labels, NpCounts_RO n_categories,
+           double perplexity) -> nb::ndarray<nb::numpy, double, nb::ndim<2>> {
+            const size_t N = X.shape(0), d = X.shape(1), columns = labels.shape(0);
+            if (labels.shape(1) != N || n_categories.shape(0) != columns)
+                throw std::invalid_argument("labels must have shape (n_labels, n_cells), with one category count per label column");
+            if (N > static_cast<size_t>(std::numeric_limits<int>::max()) || (N > 0 && d == 0))
+                throw std::invalid_argument("X must have at least one dimension and fit integer cell indices");
+            if (!std::isfinite(perplexity) || perplexity * 3 < 1 ||
+                perplexity * 3 >= std::numeric_limits<int>::max())
+                throw std::invalid_argument("perplexity must give a positive, finite integer neighbor count");
+            for (size_t column = 0; column < columns; ++column) {
+                const int count = n_categories.data()[column];
+                if (count < 0 || (N > 0 && count == 0))
+                    throw std::invalid_argument("category counts must be positive for nonempty data");
+                for (size_t i = 0; i < N; ++i) {
+                    const int code = labels.data()[column * N + i];
+                    if (code < 0 || code >= count)
+                        throw std::invalid_argument("label codes must be within their category count");
+                }
+            }
+
+            arma::mat X_arma(N, d);
+            for (size_t i = 0; i < N; ++i)
+                for (size_t j = 0; j < d; ++j)
+                    X_arma(i, j) = X.data()[i * d + j];
+
+            auto out = std::make_unique<double[]>(N * columns);
+            if (N > 0 && columns > 0)
+                lisi::compute_lisi_columns_impl(
+                    X_arma, labels.data(), n_categories.data(), columns, perplexity, out.get()
+                );
+            nb::capsule owner(out.get(), [](void* p) noexcept { delete[] static_cast<double*>(p); });
+            double* data = out.release();
+            size_t shape[2] = {N, columns};
+            return nb::ndarray<nb::numpy, double, nb::ndim<2>>(data, 2, shape, std::move(owner));
+        },
+        nb::arg("X"), nb::arg("labels"), nb::arg("n_categories"), nb::arg("perplexity"),
+        nb::rv_policy::move,
+        "Compute LISI for multiple label columns while sharing neighbor searches."
+    );
 }
